@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "winbox",
+  "version": "0.1.0",
+  "identifier": "br.com.winbox.gui",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "winbox",
+        "width": 1024,
+        "height": 768,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost http://127.0.0.1:*; frame-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": ["deb", "appimage"],
+    "icon": [],
+    "category": "Utility",
+    "shortDescription": "Windows VM manager",
+    "longDescription": "GUI for winbox — manages dockur/windows VMs with profiles, bundles and persistent state"
+  },
+  "plugins": {}
+}

@@ -1,0 +1,22 @@
+{
+  "name": "winbox-gui",
+  "version": "0.1.0",
+  "description": "GUI for winbox — Windows VM manager",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check:js": "node --check src/main.js && node --check src/i18n.js && node --check src/dom-utils.js && node --check src/locales/en-US.js && node --check src/locales/pt-BR.js",
+    "test:js": "node --test src/*.test.js",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "npm run test:js && npm run test:rust"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  }
+}
