@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>winbox</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand" aria-label="winbox">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="8" height="8" rx="1.5"/>
+          <rect x="13" y="3" width="8" height="8" rx="1.5"/>
+          <rect x="3" y="13" width="8" height="8" rx="1.5"/>
+          <rect x="13" y="13" width="8" height="8" rx="1.5"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>winbox</h1>
+        <div class="version" id="version">—</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-primary" id="btn-install"
+              data-i18n-attr="title:app.newProfile.title">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span data-i18n="app.newProfile">New profile</span>
+      </button>
+      <button class="btn btn-icon" id="btn-refresh"
+              data-i18n-attr="title:app.refresh.title,aria-label:app.refresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+      <select id="lang-switch" class="lang-switch"
+              data-i18n-attr="aria-label:app.language,title:app.language">
+        <option value="en-US">EN</option>
+        <option value="pt-BR">PT</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="main" id="main">
+    <div class="empty">
+      <div class="empty-illustration">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      </div>
+      <div class="empty-title" data-i18n="empty.loading">Loading…</div>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"><svg class="toast-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span id="toast-msg"></span></div>
+
+  <!-- ═══ MODAL: install ═══ -->
+  <div id="modal-install" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><span data-i18n="install.title">New profile</span> <span class="subtitle">· <span data-i18n="install.subtitle">configure the VM</span></span></h2>
+        <button class="btn btn-icon btn-sm" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form id="form-install" class="modal-body">
+        <div class="section">
+          <div class="section-title" data-i18n="install.section.system">System</div>
+          <div class="os-picker" id="install-os-picker">
+            <label class="os-option">
+              <input type="radio" name="image_family" value="windows" checked />
+              <span class="os-option-card">
+                <span class="os-option-title">Windows</span>
+                <span class="os-option-desc" data-i18n="install.os.windows.desc">11, 10, Server (RDP)</span>
+              </span>
+            </label>
+            <label class="os-option">
+              <input type="radio" name="image_family" value="linux_distro" />
+              <span class="os-option-card">
+                <span class="os-option-title">Linux distro</span>
+                <span class="os-option-desc" data-i18n="install.os.linux.desc">Ubuntu, Fedora, Arch… (web-VNC)</span>
+              </span>
+            </label>
+            <label class="os-option">
+              <input type="radio" name="image_family" value="linux_iso" />
+              <span class="os-option-card">
+                <span class="os-option-title" data-i18n="install.os.iso.title">Custom ISO</span>
+                <span class="os-option-desc" data-i18n="install.os.iso.desc">Local .iso/.img/.qcow2 (web-VNC)</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="install.section.identity">Identification</div>
+          <div class="field">
+            <label class="field-label" for="install-name"><span data-i18n="install.field.name">Name</span> <span class="hint" data-i18n="install.field.name.hint">[a-z0-9_-]</span></label>
+            <input class="field-input" id="install-name" name="name" required pattern="[a-z0-9][a-z0-9_-]*"
+                   data-i18n-attr="placeholder:install.field.name.ph" placeholder="banking" autocomplete="off"/>
+          </div>
+          <div class="field" data-os="windows">
+            <label class="field-label" for="install-version" data-i18n="install.field.version">Windows version</label>
+            <select class="field-select" id="install-version" name="version">
+              <option value="11">Windows 11 Pro</option>
+              <option value="11l">Windows 11 LTSC</option>
+              <option value="11e">Windows 11 Enterprise</option>
+              <option value="10">Windows 10 Pro</option>
+              <option value="10l">Windows 10 LTSC</option>
+              <option value="10e">Windows 10 Enterprise</option>
+              <option value="2025">Windows Server 2025</option>
+              <option value="2022">Windows Server 2022</option>
+            </select>
+          </div>
+          <div class="field" data-os="linux_distro">
+            <label class="field-label" for="install-boot" data-i18n="install.field.distro">Distro</label>
+            <select class="field-select" id="install-boot" name="boot"></select>
+          </div>
+          <div class="field" data-os="linux_iso">
+            <label class="field-label" for="install-iso" data-i18n="install.field.iso">ISO file</label>
+            <div class="iso-picker">
+              <input class="field-input" id="install-iso" name="iso_path" readonly placeholder="—" />
+              <button type="button" class="btn btn-ghost btn-sm" id="install-iso-pick" data-i18n="install.field.iso.pick">Browse…</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="install.section.resources">Resources</div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label" for="install-ram"><span data-i18n="install.field.ram">RAM</span> <span class="hint" id="ram-hint"></span></label>
+              <input class="field-input" id="install-ram" name="ram" value="8G" placeholder="8G" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="install-cpu"><span data-i18n="install.field.cpu">CPU</span> <span class="hint" id="cpu-hint"></span></label>
+              <input class="field-input" id="install-cpu" name="cpu" type="number" min="1" value="4" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="install-disk" data-i18n="install.field.disk">Disk</label>
+              <select class="field-select" id="install-disk" name="disk">
+                <option value="64G">64 GB</option>
+                <option value="128G" selected>128 GB</option>
+                <option value="256G">256 GB</option>
+                <option value="512G">512 GB</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" data-os="windows">
+          <div class="section-title" data-i18n="install.section.creds">RDP credentials</div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label" for="install-user" data-i18n="install.field.user">Username</label>
+              <input class="field-input" id="install-user" name="user" autocomplete="off" required />
+            </div>
+            <div class="field">
+              <label class="field-label" for="install-password" data-i18n="install.field.password">Password</label>
+              <input class="field-input" id="install-password" name="password" type="password" autocomplete="new-password" required />
+            </div>
+          </div>
+        </div>
+
+        <div class="section" data-os="windows">
+          <div class="section-title" data-i18n="install.section.locale">Locale</div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label" for="install-language" data-i18n="install.field.language">Language</label>
+              <select class="field-select" id="install-language" name="language">
+                <option value="Portuguese">Portuguese</option>
+                <option value="English">English</option>
+                <option value="Spanish">Spanish</option>
+                <option value="French">French</option>
+                <option value="German">German</option>
+                <option value="Italian">Italian</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="install-region" data-i18n="install.field.region">Region</label>
+              <input class="field-input" id="install-region" name="region" value="pt-BR" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="install-keyboard" data-i18n="install.field.keyboard">Keyboard</label>
+              <input class="field-input" id="install-keyboard" name="keyboard" value="pt-BR" />
+            </div>
+          </div>
+        </div>
+
+        <div class="section" data-os="windows">
+          <div class="section-title"><span data-i18n="install.section.bundles">Bundles</span> <span style="color:var(--text-subtle);font-weight:400;text-transform:none;letter-spacing:0">(<span data-i18n="install.section.bundles.note">essentials is always applied</span>)</span></div>
+          <div id="bundles-picker" class="bundles-picker"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="install.section.gpu">GPU</div>
+          <div class="field">
+            <label class="field-label" for="install-gpu" data-i18n="install.gpu.device">GPU</label>
+            <select class="field-select" id="install-gpu" name="gpu">
+              <option value="" data-i18n="install.gpu.none">No GPU</option>
+            </select>
+          </div>
+          <div id="install-gpu-status" class="gpu-status" hidden></div>
+          <div id="install-gpu-notes" class="gpu-notes"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" data-close data-i18n="install.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="install.submit">Create and start</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: settings ═══ -->
+  <div id="modal-settings" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><span data-i18n="settings.title">Settings</span> <span class="subtitle">· <span id="settings-profile"></span></span></h2>
+        <button class="btn btn-icon btn-sm" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form id="form-settings" class="modal-body">
+        <div class="section">
+          <div class="section-title" data-i18n="settings.section.resources">Resources</div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label" for="settings-ram"><span data-i18n="install.field.ram">RAM</span> <span class="hint" id="settings-ram-hint"></span></label>
+              <input class="field-input" id="settings-ram" name="ram" placeholder="ex: 8G" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="settings-cpu"><span data-i18n="install.field.cpu">CPU</span> <span class="hint" id="settings-cpu-hint"></span></label>
+              <input class="field-input" id="settings-cpu" name="cpu" type="number" min="1" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="settings-disk"><span data-i18n="install.field.disk">Disk</span> <span class="hint" data-i18n="settings.field.disk.hint">increase only</span></label>
+              <input class="field-input" id="settings-disk" name="disk" placeholder="ex: 128G" />
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="settings.section.creds">RDP credentials</div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label" for="settings-user" data-i18n="install.field.user">Username</label>
+              <input class="field-input" id="settings-user" name="user" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="settings-password" data-i18n="install.field.password">Password</label>
+              <input class="field-input" id="settings-password" name="password" type="password" />
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="settings.section.ports">Port forwarding</div>
+          <div id="ports-list" class="ports-list"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-add-port">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span data-i18n="settings.addRule">Add rule</span>
+          </button>
+          <div class="callout" style="margin-top:10px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+            <span data-i18n="settings.ports.callout">Ports are forwarded from the host to the container.</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="settings.section.gpu">GPU</div>
+          <div class="field">
+            <label class="field-label" for="settings-gpu" data-i18n="install.gpu.device">GPU</label>
+            <select class="field-select" id="settings-gpu" name="gpu">
+              <option value="" data-i18n="install.gpu.none">No GPU</option>
+            </select>
+          </div>
+          <div id="settings-gpu-status" class="gpu-status" hidden></div>
+          <div id="settings-gpu-notes" class="gpu-notes"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" data-i18n="settings.section.reference">Reference (read-only)</div>
+          <dl class="data-display">
+            <dt data-i18n="settings.ref.version">Version</dt><dd id="settings-version"></dd>
+            <dt data-i18n="settings.ref.web">Web viewer</dt><dd id="settings-web"></dd>
+            <dt data-i18n="settings.ref.rdp">RDP</dt><dd id="settings-rdp"></dd>
+            <dt data-i18n="settings.ref.shared">Shared</dt><dd id="settings-shared"></dd>
+            <dt data-i18n="settings.ref.storage">Storage</dt><dd id="settings-storage"></dd>
+            <dt data-i18n="settings.ref.bundles">Bundles</dt><dd id="settings-bundles"></dd>
+          </dl>
+        </div>
+
+        <label class="checkbox-field">
+          <input type="checkbox" name="restart" id="settings-restart" checked />
+          <span class="checkbox-field-label" data-i18n="settings.restart">Recreate container to apply now (if running)</span>
+        </label>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" data-close data-i18n="install.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="settings.save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: logs ═══ -->
+  <div id="modal-logs" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card modal-wide">
+      <div class="modal-header">
+        <h2><span data-i18n="logs.title">Logs</span> <span class="subtitle">· <span id="logs-profile"></span></span></h2>
+        <button class="btn btn-icon btn-sm" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <pre class="logs" id="logs-content" data-i18n="logs.loading">Loading…</pre>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="btn-refresh-logs">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/></svg>
+          <span data-i18n="logs.refresh">Refresh</span>
+        </button>
+        <button type="button" class="btn btn-primary" data-close data-i18n="logs.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: snapshots ═══ -->
+  <div id="modal-snapshots" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card modal-wide">
+      <div class="modal-header">
+        <h2><span data-i18n="snapshots.title">Snapshots</span> <span class="subtitle">· <span id="snapshots-profile"></span></span></h2>
+        <button class="btn btn-icon btn-sm" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="section">
+          <div class="section-title" data-i18n="snapshots.create">Create snapshot</div>
+          <div class="snapshot-create">
+            <input class="field-input" id="snapshot-name" autocomplete="off" pattern="[A-Za-z0-9_.-]+" />
+            <button type="button" class="btn btn-primary btn-sm" id="btn-create-snapshot" data-i18n="snapshots.createButton">Create</button>
+          </div>
+        </div>
+        <div id="snapshots-list" class="snapshots-list" data-i18n="snapshots.loading">Loading…</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="btn-refresh-snapshots">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/></svg>
+          <span data-i18n="logs.refresh">Refresh</span>
+        </button>
+        <button type="button" class="btn btn-primary" data-close data-i18n="logs.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: reapply bundles ═══ -->
+  <div id="modal-reapply" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><span data-i18n="reapply.title">Reinstall bundles</span> <span class="subtitle">· <span id="reapply-profile"></span></span></h2>
+        <button class="btn btn-icon btn-sm" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="callout" style="margin-bottom:14px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+          <span data-i18n="reapply.callout">dockur does not expose SSH/exec inside Windows, so the script is copied to the shared folder and you run it from inside the VM (PowerShell as admin).</span>
+        </div>
+        <div id="reapply-status" style="color:var(--text-dim);margin-bottom:10px"></div>
+        <div id="reapply-paths"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" data-close data-i18n="logs.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ MODAL: confirm ═══ -->
+  <div id="modal-confirm" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card modal-narrow">
+      <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
+      <div class="modal-body">
+        <p id="confirm-message" style="color:var(--text-dim);font-size:13px"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" data-close data-i18n="confirm.cancel">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-yes" data-i18n="confirm.ok">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
