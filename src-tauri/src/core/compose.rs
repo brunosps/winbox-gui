@@ -12,22 +12,28 @@ use super::validation;
 /// when GPU_BDF is set on the host config.
 pub fn write(profile: &str) -> Result<()> {
     let env_path = paths::profile_env_file(profile);
-    let (family, extra_ports, extra_devices, extra_caps, arguments, iso_path) =
+    let (family, extra_ports, extra_devices, extra_caps, extra_ulimits, arguments, iso_path) =
         if env_path.is_file() {
             let map = env_file::read(&env_path)?;
             let family = ImageFamily::from_env_map(&map);
             let ports = build_extra_ports(env_file::get(&map, "EXTRA_PORTS"))?;
             let gpu_bdf = env_file::get(&map, "GPU_BDF").trim().to_string();
-            let (devs, caps, args) = if gpu_bdf.is_empty() {
-                (String::new(), String::new(), default_arguments())
+            let (devs, caps, args, ulimits) = if gpu_bdf.is_empty() {
+                (
+                    String::new(),
+                    String::new(),
+                    default_arguments(),
+                    String::new(),
+                )
             } else {
                 build_gpu_block(&gpu_bdf)
             };
             let iso = env_file::get(&map, "ISO_PATH").to_string();
-            (family, ports, devs, caps, args, iso)
+            (family, ports, devs, caps, ulimits, args, iso)
         } else {
             (
                 ImageFamily::Windows,
+                String::new(),
                 String::new(),
                 String::new(),
                 String::new(),
@@ -37,17 +43,26 @@ pub fn write(profile: &str) -> Result<()> {
         };
 
     let body = match family {
-        ImageFamily::Windows => {
-            render_windows(&arguments, &extra_devices, &extra_caps, &extra_ports)
-        }
-        ImageFamily::LinuxDistro => {
-            render_linux_distro(&arguments, &extra_devices, &extra_caps, &extra_ports)
-        }
+        ImageFamily::Windows => render_windows(
+            &arguments,
+            &extra_devices,
+            &extra_caps,
+            &extra_ports,
+            &extra_ulimits,
+        ),
+        ImageFamily::LinuxDistro => render_linux_distro(
+            &arguments,
+            &extra_devices,
+            &extra_caps,
+            &extra_ports,
+            &extra_ulimits,
+        ),
         ImageFamily::LinuxIso => render_linux_iso(
             &arguments,
             &extra_devices,
             &extra_caps,
             &extra_ports,
+            &extra_ulimits,
             &iso_path,
         ),
     };
@@ -57,7 +72,7 @@ pub fn write(profile: &str) -> Result<()> {
     Ok(())
 }
 
-fn render_windows(arguments: &str, devs: &str, caps: &str, extra: &str) -> String {
+fn render_windows(arguments: &str, devs: &str, caps: &str, extra: &str, ulimits: &str) -> String {
     format!(
         "services:\n  \
          winbox:\n    \
@@ -87,7 +102,7 @@ fn render_windows(arguments: &str, devs: &str, caps: &str, extra: &str) -> Strin
          volumes:\n      \
          - ${{STORAGE_DIR}}:/storage\n      \
          - ${{SHARED_DIR}}:/shared\n      \
-         - ${{OEM_DIR}}:/oem\n    \
+         - ${{OEM_DIR}}:/oem{ulimits}\n    \
          mem_limit: ${{MEM_LIMIT}}\n    \
          cpus: \"${{CPU_LIMIT}}\"\n    \
          restart: unless-stopped\n    \
@@ -96,10 +111,17 @@ fn render_windows(arguments: &str, devs: &str, caps: &str, extra: &str) -> Strin
         devs = devs,
         caps = caps,
         extra = extra,
+        ulimits = ulimits,
     )
 }
 
-fn render_linux_distro(arguments: &str, devs: &str, caps: &str, extra: &str) -> String {
+fn render_linux_distro(
+    arguments: &str,
+    devs: &str,
+    caps: &str,
+    extra: &str,
+    ulimits: &str,
+) -> String {
     format!(
         "services:\n  \
          winbox:\n    \
@@ -124,7 +146,7 @@ fn render_linux_distro(arguments: &str, devs: &str, caps: &str, extra: &str) -> 
          - \"127.0.0.1:${{SSH_PORT}}:22/tcp\"{extra}\n    \
          volumes:\n      \
          - ${{STORAGE_DIR}}:/storage\n      \
-         - ${{SHARED_DIR}}:/shared\n    \
+         - ${{SHARED_DIR}}:/shared{ulimits}\n    \
          mem_limit: ${{MEM_LIMIT}}\n    \
          cpus: \"${{CPU_LIMIT}}\"\n    \
          restart: unless-stopped\n    \
@@ -133,6 +155,7 @@ fn render_linux_distro(arguments: &str, devs: &str, caps: &str, extra: &str) -> 
         devs = devs,
         caps = caps,
         extra = extra,
+        ulimits = ulimits,
     )
 }
 
@@ -141,6 +164,7 @@ fn render_linux_iso(
     devs: &str,
     caps: &str,
     extra: &str,
+    ulimits: &str,
     iso_path: &str,
 ) -> String {
     format!(
@@ -168,7 +192,7 @@ fn render_linux_iso(
          volumes:\n      \
          - {iso_volume}\n      \
          - ${{STORAGE_DIR}}:/storage\n      \
-         - ${{SHARED_DIR}}:/shared\n    \
+         - ${{SHARED_DIR}}:/shared{ulimits}\n    \
          mem_limit: ${{MEM_LIMIT}}\n    \
          cpus: \"${{CPU_LIMIT}}\"\n    \
          restart: unless-stopped\n    \
@@ -177,6 +201,7 @@ fn render_linux_iso(
         devs = devs,
         caps = caps,
         extra = extra,
+        ulimits = ulimits,
         iso_volume = yaml_double_quote(&format!("{iso_path}:/boot.iso:ro")),
     )
 }
@@ -185,7 +210,7 @@ fn default_arguments() -> String {
     "-rtc base=localtime,clock=host,driftfix=slew".to_string()
 }
 
-fn build_gpu_block(bdf: &str) -> (String, String, String) {
+fn build_gpu_block(bdf: &str) -> (String, String, String, String) {
     // devices: mount /dev/vfio/vfio and /dev/vfio/<group>
     let group = read_iommu_group(bdf);
     let mut devs = String::new();
@@ -193,8 +218,14 @@ fn build_gpu_block(bdf: &str) -> (String, String, String) {
     if let Some(g) = group {
         devs.push_str(&format!("\n      - /dev/vfio/{}", g));
     }
-    // SYS_ADMIN is needed for ioctls on vfio groups.
-    let caps = "\n      - SYS_ADMIN".to_string();
+    // SYS_ADMIN: ioctls on vfio groups. IPC_LOCK: VFIO pins all guest RAM
+    // via mlock; the dockerd default RLIMIT_MEMLOCK (8 MiB on systemd) makes
+    // QEMU exit with vfio_container_dma_map = -12 ENOMEM without it.
+    let caps = "\n      - SYS_ADMIN\n      - IPC_LOCK".to_string();
+    // Belt and suspenders: even with IPC_LOCK some kernels still honor
+    // RLIMIT_MEMLOCK. -1 lifts the soft+hard locked-memory limit so the
+    // pinning of guest RAM (RAM_SIZE) succeeds.
+    let ulimits = "\n    ulimits:\n      memlock: -1".to_string();
     // Always ship Code 43 mitigation: the NVIDIA consumer Windows driver
     // refuses to load when it detects a VM. Spoofing kvm=off + hv_vendor_id
     // is harmless for Quadro/datacenter cards but rescues every GeForce.
@@ -203,7 +234,7 @@ fn build_gpu_block(bdf: &str) -> (String, String, String) {
          -cpu host,kvm=off,hv_vendor_id=whatever \
          -device vfio-pci,host={bdf},multifunction=on"
     );
-    (devs, caps, args)
+    (devs, caps, args, ulimits)
 }
 
 fn read_iommu_group(bdf: &str) -> Option<u32> {
@@ -253,6 +284,45 @@ mod tests {
         assert_eq!(
             yaml_double_quote("/tmp/Windows ISO/test.iso:/boot.iso:ro"),
             "\"/tmp/Windows ISO/test.iso:/boot.iso:ro\""
+        );
+    }
+
+    #[test]
+    fn gpu_block_emits_memlock_and_ipc_lock() {
+        let (devs, caps, args, ulimits) = build_gpu_block("0000:01:00.0");
+        assert!(devs.contains("/dev/vfio/vfio"));
+        assert!(caps.contains("SYS_ADMIN"));
+        assert!(
+            caps.contains("IPC_LOCK"),
+            "GPU profiles must request IPC_LOCK so QEMU can mlock guest RAM"
+        );
+        assert!(
+            ulimits.contains("memlock: -1"),
+            "GPU profiles must lift memlock rlimit; got {ulimits:?}"
+        );
+        assert!(args.contains("vfio-pci,host=0000:01:00.0"));
+    }
+
+    #[test]
+    fn windows_render_with_gpu_includes_ulimits() {
+        let with_gpu = render_windows(
+            "qemu-args",
+            "\n      - /dev/vfio/vfio",
+            "\n      - SYS_ADMIN\n      - IPC_LOCK",
+            "",
+            "\n    ulimits:\n      memlock: -1",
+        );
+        assert!(with_gpu.contains("ulimits:"));
+        assert!(with_gpu.contains("memlock: -1"));
+        // ulimits must sit at service indent (4 spaces), between volumes and mem_limit
+        let ul_idx = with_gpu.find("ulimits:").unwrap();
+        let mem_idx = with_gpu.find("mem_limit:").unwrap();
+        assert!(ul_idx < mem_idx);
+
+        let without_gpu = render_windows("qemu-args", "", "", "", "");
+        assert!(
+            !without_gpu.contains("ulimits:"),
+            "non-GPU profiles must not emit a ulimits key"
         );
     }
 }
