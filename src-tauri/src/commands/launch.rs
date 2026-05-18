@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use std::io::{ErrorKind, Read};
 use std::net::{SocketAddr, TcpStream};
 use std::thread::sleep;
 use std::time::Duration;
@@ -111,6 +112,59 @@ pub(crate) fn wait_for_windows<D: DockerClient>(
     })
 }
 
+/// Probe the host-forwarded RDP port and wait until the guest's RDP server
+/// actually answers. The Docker port forward accepts TCP immediately, but
+/// while Windows is still booting / before the RDP service binds, the guest
+/// resets the forwarded connection — xfreerdp then fails with
+/// ERRCONNECT_CONNECT_TRANSPORT_FAILED. We distinguish ready vs not-ready
+/// by attempting to read one byte:
+///   * EOF / ConnectionReset → guest is rejecting → retry.
+///   * WouldBlock / TimedOut → server is up and waiting for the X.224
+///     handshake the client must send first → ready.
+///   * Bytes received → server greeted (rare for RDP) → ready.
+pub(crate) fn wait_for_rdp_handshake(
+    profile: &str,
+    port: u16,
+) -> std::result::Result<(), LaunchError> {
+    if port == 0 {
+        return Err(LaunchError::Other {
+            message: format!("RDP_PORT não definido para '{profile}'"),
+        });
+    }
+    let addr: SocketAddr = format!("{}:{}", paths::HOST, port).parse().map_err(|e| {
+        LaunchError::Other {
+            message: format!("endereço inválido {}:{} — {e}", paths::HOST, port),
+        }
+    })?;
+    // 60 iterations × 2s = up to 2 minutes after the dockur "started" marker.
+    for _ in 0..60 {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+            Ok(mut s) => {
+                let _ = s.set_read_timeout(Some(Duration::from_millis(800)));
+                let mut buf = [0u8; 1];
+                match s.read(&mut buf) {
+                    Ok(0) => { /* EOF — guest rejected, retry */ }
+                    Ok(_) => return Ok(()),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            ErrorKind::WouldBlock | ErrorKind::TimedOut
+                        ) =>
+                    {
+                        return Ok(())
+                    }
+                    Err(_) => { /* ConnectionReset / other — retry */ }
+                }
+            }
+            Err(_) => { /* port forward not up yet — retry */ }
+        }
+        sleep(Duration::from_secs(2));
+    }
+    Err(LaunchError::TimeoutWindows {
+        profile: profile.to_string(),
+    })
+}
+
 pub(crate) fn wait_for_web_port(profile: &str, port: u16) -> std::result::Result<(), LaunchError> {
     if port == 0 {
         return Err(LaunchError::Other {
@@ -175,6 +229,17 @@ pub fn launch_rdp<D: DockerClient>(
     docker::preflight_docker_daemon()?;
     docker::preflight_freerdp()?;
     ensure_running(profile, docker)?;
+    // wait_for_windows only checks the dockur "started" log marker — that
+    // fires before the RDP server inside Windows is reachable, so without
+    // this extra probe xfreerdp sees ERRCONNECT_CONNECT_TRANSPORT_FAILED
+    // and exits silently.
+    let env = env_file::read(&paths::profile_env_file(profile)).map_err(|e| {
+        LaunchError::Other {
+            message: format!("falha lendo env: {e:#}"),
+        }
+    })?;
+    let rdp_port = env_file::get_u16(&env, "RDP_PORT");
+    wait_for_rdp_handshake(profile, rdp_port)?;
     rdp::launch(profile).map_err(|e| LaunchError::Other {
         message: format!("{e:#}"),
     })

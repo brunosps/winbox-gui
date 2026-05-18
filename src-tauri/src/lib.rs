@@ -3,7 +3,7 @@ pub mod commands;
 pub mod core;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::core::connect::ConnectMode;
 use crate::core::image_family::{ImageFamily, SUPPORTED_DISTROS};
@@ -327,35 +327,24 @@ async fn launch_profile(
     result
 }
 
-fn open_web_vnc_window(app: &AppHandle, profile_name: &str, port: u16) -> anyhow::Result<()> {
+fn open_web_vnc_window(_app: &AppHandle, profile_name: &str, port: u16) -> anyhow::Result<()> {
     if port == 0 {
         anyhow::bail!("WEB_PORT inválida para perfil '{}'", profile_name);
     }
-    let label = format!(
-        "vnc-{}",
-        profile_name.replace(|c: char| !c.is_ascii_alphanumeric(), "-")
-    );
-    // If a previous window for this profile is still open, focus it.
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return Ok(());
-    }
+    // We previously launched noVNC inside a Tauri WebView, but WebKitGTK 4.1
+    // does not deliver keyboard/mouse events to the noVNC canvas reliably
+    // (the frame renders fine, input is dropped at the WM layer). Use the
+    // user's default browser instead — it gets clipboard, full-screen, and
+    // input forwarding for free, which matches the legacy CLI behavior.
     let url = format!(
         "http://{}:{}/?autoconnect=true&resize=scale",
         paths::HOST,
         port
     );
-    let parsed = url
-        .parse::<tauri::Url>()
-        .map_err(|e| anyhow::anyhow!("URL inválida {url}: {e}"))?;
-    tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(parsed))
-        .title(format!("VNC ({})", profile_name))
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(640.0, 480.0)
-        .resizable(true)
-        .build()
-        .map_err(|e| anyhow::anyhow!("falha ao abrir janela VNC: {e}"))?;
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("falha ao abrir noVNC ({url}): {e}"))?;
     Ok(())
 }
 
