@@ -12,3 +12,4 @@ test-results/
 playwright-report/
 .playwright/
 .DS_Store
+tests/e2e/fixtures/xdg/
