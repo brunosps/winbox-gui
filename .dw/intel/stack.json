@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "modules": [
+    {
+      "path": "src-tauri/",
+      "language": "rust",
+      "edition": "2021",
+      "rust_version": "1.75",
+      "framework": "tauri",
+      "tauri_version": "2.0",
+      "build_tool": "cargo",
+      "binary": "winbox-gui",
+      "lib": "winbox_gui_lib",
+      "crate_types": ["lib", "cdylib", "staticlib"],
+      "key_deps": [
+        "tauri@2.0",
+        "tauri-plugin-dialog@2.0",
+        "serde@1",
+        "anyhow@1",
+        "clap@4",
+        "chrono@0.4",
+        "walkdir@2",
+        "which@6",
+        "include_dir@0.7",
+        "dialoguer@0.11"
+      ]
+    },
+    {
+      "path": "src/",
+      "language": "javascript",
+      "module_type": "esm",
+      "framework": "vanilla",
+      "build_tool": "tauri-cli",
+      "test_runner": "node:test",
+      "key_deps": ["@tauri-apps/api@2.0"],
+      "ui": "html+css+js, no SPA framework"
+    }
+  ],
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test:js": "node --test src/*.test.js",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "npm run test:js && npm run test:rust",
+    "check:js": "node --check src/main.js src/i18n.js src/dom-utils.js src/locales/*.js"
+  },
+  "external_runtime_deps": {
+    "docker": "host Docker Engine v2",
+    "kvm": "/dev/kvm",
+    "xfreerdp3": "FreeRDP 3.x client",
+    "vfio": "/dev/vfio/* for GPU passthrough profiles"
+  },
+  "pinned_images": {
+    "dockurr/windows": "5.14",
+    "qemux/qemu": "7.29"
+  }
+}

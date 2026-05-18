@@ -1,0 +1,8 @@
+{
+  "updated_at": "2026-05-17T00:00:00Z",
+  "version": "1.0",
+  "mode": "full",
+  "files_scanned": 35,
+  "bugfixes_indexed": 0,
+  "note": "Hand-curated by /dw-intel --build in Step 1 of dw-autopilot stability run. Full grep-and-write would be redundant given session memory of files."
+}
