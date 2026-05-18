@@ -238,7 +238,8 @@ fn dispatch(cmd: Cmd) -> Result<()> {
         }
         Cmd::Start { profile } => {
             let p = profile::resolve(profile.as_deref())?;
-            cmd_launch::start(&p)
+            let docker = crate::core::docker::CliDocker;
+            cmd_launch::start(&p, &docker).map_err(|e| anyhow::anyhow!("{e}"))
         }
         Cmd::Stop { profile } => {
             let p = profile::resolve(profile.as_deref())?;

@@ -254,8 +254,15 @@ fn list_bundles() -> Result<Vec<core_bundles::Bundle>, String> {
 }
 
 #[tauri::command]
-async fn launch_profile(app: AppHandle, name: String) -> Result<OperationResult, String> {
-    let p = profile::resolve(Some(&name)).map_err(|e| e.to_string())?;
+async fn launch_profile(
+    app: AppHandle,
+    name: String,
+) -> Result<OperationResult, crate::core::launch_error::LaunchError> {
+    use crate::core::docker::CliDocker;
+    use crate::core::launch_error::LaunchError;
+    let p = profile::resolve(Some(&name)).map_err(|e| LaunchError::Other {
+        message: e.to_string(),
+    })?;
     let mode = connect::resolve_for_profile(&p);
     let profile_name = p.clone();
     let profile_for_error = profile_name.clone();
@@ -268,12 +275,19 @@ async fn launch_profile(app: AppHandle, name: String) -> Result<OperationResult,
         "running",
         "Preparando conexão do perfil.",
     );
-    let result = run_blocking(move || {
+    let join = tauri::async_runtime::spawn_blocking(move || -> Result<OperationResult, LaunchError> {
+        let docker = CliDocker;
         match mode {
-            ConnectMode::Rdp => commands::launch::launch_rdp(&profile_name),
-            ConnectMode::WebVnc => commands::launch::ensure_for_web_vnc(&profile_name)
-                .and_then(|port| open_web_vnc_window(&app_clone, &profile_name, port)),
-        }?;
+            ConnectMode::Rdp => commands::launch::launch_rdp(&profile_name, &docker)?,
+            ConnectMode::WebVnc => {
+                let port = commands::launch::ensure_for_web_vnc(&profile_name, &docker)?;
+                open_web_vnc_window(&app_clone, &profile_name, port).map_err(|e| {
+                    LaunchError::Other {
+                        message: format!("{e:#}"),
+                    }
+                })?;
+            }
+        }
         Ok(OperationResult {
             profile: profile_name,
             op: "launch".into(),
@@ -281,7 +295,35 @@ async fn launch_profile(app: AppHandle, name: String) -> Result<OperationResult,
         })
     })
     .await;
-    emit_operation_result(&app, &profile_for_error, "launch", result)
+    let result = match join {
+        Ok(inner) => inner,
+        Err(e) => Err(LaunchError::Other {
+            message: e.to_string(),
+        }),
+    };
+    match &result {
+        Ok(res) => {
+            emit_progress(
+                &app,
+                &res.profile,
+                &res.op,
+                "complete",
+                "success",
+                &res.message,
+            );
+        }
+        Err(err) => {
+            emit_progress(
+                &app,
+                &profile_for_error,
+                "launch",
+                "failed",
+                "error",
+                &err.to_string(),
+            );
+        }
+    }
+    result
 }
 
 fn open_web_vnc_window(app: &AppHandle, profile_name: &str, port: u16) -> anyhow::Result<()> {

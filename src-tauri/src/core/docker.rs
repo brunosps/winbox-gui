@@ -1,16 +1,22 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
+use super::launch_error::LaunchError;
 use super::paths;
 
 /// Abstraction over the Docker CLI. Real callers use [`CliDocker`]; tests
 /// inject [`mock::MockDocker`] (or any custom impl) to drive the launch
 /// path without a real daemon.
+///
+/// Operations that surface launch-path failures (`compose_run`, `pull`)
+/// return [`LaunchError`] so the frontend can render structured hints.
+/// Lower-level operations stay on `anyhow::Result` to keep the trait
+/// from leaking launch-specific semantics into housekeeping calls.
 pub trait DockerClient {
     fn container_status(&self, name: &str) -> String;
-    fn compose_run(&self, profile: &str, action_args: &[&str]) -> Result<()>;
+    fn compose_run(&self, profile: &str, action_args: &[&str]) -> std::result::Result<(), LaunchError>;
     fn logs(&self, container: &str, extra: &[&str]) -> Result<String>;
     fn logs_contains(&self, container: &str, needle: &str) -> bool;
     fn pause(&self, container: &str) -> Result<()>;
@@ -18,7 +24,7 @@ pub trait DockerClient {
     fn stop(&self, container: &str, timeout: u32) -> Result<()>;
     fn kill(&self, container: &str) -> Result<()>;
     fn rm_force(&self, container: &str) -> Result<()>;
-    fn pull(&self, image: &str) -> Result<()>;
+    fn pull(&self, image: &str) -> std::result::Result<(), LaunchError>;
 }
 
 /// Default implementation that shells out to `docker` (v2 `compose` plugin
@@ -51,7 +57,7 @@ impl DockerClient for CliDocker {
         }
     }
 
-    fn compose_run(&self, profile: &str, action_args: &[&str]) -> Result<()> {
+    fn compose_run(&self, profile: &str, action_args: &[&str]) -> std::result::Result<(), LaunchError> {
         let cfg_dir = paths::profile_cfg_dir(profile);
         let env_file = paths::profile_env_file(profile);
         let compose_file = paths::profile_compose_file(profile);
@@ -69,11 +75,14 @@ impl DockerClient for CliDocker {
             .current_dir(&cfg_dir)
             .args(action_args);
 
-        let status = cmd.status().with_context(|| format!("{} compose", bin))?;
-        if !status.success() {
-            bail!("docker compose {:?} failed", action_args);
+        let out = cmd.output().map_err(|e| LaunchError::Other {
+            message: format!("falha ao executar {bin} compose: {e}"),
+        })?;
+        if out.status.success() {
+            return Ok(());
         }
-        Ok(())
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        Err(classify_compose_stderr(&stderr))
     }
 
     fn logs(&self, container: &str, extra: &[&str]) -> Result<String> {
@@ -138,16 +147,115 @@ impl DockerClient for CliDocker {
         Ok(())
     }
 
-    fn pull(&self, image: &str) -> Result<()> {
-        let ok = Command::new("docker")
+    fn pull(&self, image: &str) -> std::result::Result<(), LaunchError> {
+        let out = Command::new("docker")
             .args(["pull", image])
-            .status()?
-            .success();
-        if !ok {
-            bail!("docker pull failed");
+            .output()
+            .map_err(|e| LaunchError::Other {
+                message: format!("falha ao executar docker pull: {e}"),
+            })?;
+        if out.status.success() {
+            return Ok(());
         }
-        Ok(())
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        Err(LaunchError::ImagePullFailed {
+            image: image.into(),
+            stderr: stderr.lines().take(10).collect::<Vec<_>>().join("\n"),
+        })
     }
+}
+
+/// Classify `docker compose` stderr into a [`LaunchError`]. Pure function
+/// so it can be unit-tested without spawning a process.
+pub fn classify_compose_stderr(stderr: &str) -> LaunchError {
+    let lower = stderr.to_lowercase();
+
+    if let Some(port) = extract_port_conflict(stderr) {
+        return LaunchError::PortConflict { port };
+    }
+    if lower.contains("permission denied")
+        && (lower.contains("/var/run/docker.sock") || lower.contains("dial unix"))
+    {
+        return LaunchError::DockerDaemonDown;
+    }
+    if lower.contains("cannot connect to the docker daemon")
+        || lower.contains("is the docker daemon running")
+    {
+        return LaunchError::DockerDaemonDown;
+    }
+    if lower.contains("pull access denied")
+        || lower.contains("not found: manifest")
+        || lower.contains("error response from daemon: manifest")
+        || lower.contains("toomanyrequests")
+    {
+        // Best-effort image extraction from compose output like
+        // `Error response from daemon: pull access denied for foo/bar`
+        let image = extract_image_name(stderr).unwrap_or_else(|| "<unknown>".into());
+        return LaunchError::ImagePullFailed {
+            image,
+            stderr: stderr.lines().take(10).collect::<Vec<_>>().join("\n"),
+        };
+    }
+    LaunchError::Other {
+        message: stderr
+            .lines()
+            .take(5)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+    }
+}
+
+fn extract_port_conflict(stderr: &str) -> Option<u16> {
+    // Match `bind: address already in use` / `port is already allocated`
+    // patterns. Both Docker (v2) and containerd phrasings carry a host:port
+    // token immediately before the message; we extract that port.
+    let lower = stderr.to_lowercase();
+    if !lower.contains("address already in use") && !lower.contains("port is already allocated") {
+        return None;
+    }
+    // Walk the string and pick the FIRST `:NNN` run where NNN parses as u16.
+    let bytes = stderr.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start {
+                if let Ok(p) = stderr[start..end].parse::<u16>() {
+                    if p > 0 {
+                        return Some(p);
+                    }
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn extract_image_name(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        if let Some(rest) = line.split_once("pull access denied for ") {
+            let candidate = rest.1.split_whitespace().next().unwrap_or("");
+            if !candidate.is_empty() {
+                return Some(candidate.trim_end_matches(',').to_string());
+            }
+        }
+        if let Some(rest) = line.split_once("manifest for ") {
+            let candidate = rest.1.split_whitespace().next().unwrap_or("");
+            if !candidate.is_empty() {
+                return Some(candidate.trim_end_matches(':').to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Return ("docker", ["compose"]) or ("docker-compose", []) — whichever is on PATH.
@@ -178,7 +286,9 @@ pub fn container_status(name: &str) -> String {
     CliDocker.container_status(name)
 }
 pub fn compose_run(profile: &str, action_args: &[&str]) -> Result<()> {
-    CliDocker.compose_run(profile, action_args)
+    CliDocker
+        .compose_run(profile, action_args)
+        .map_err(anyhow::Error::new)
 }
 pub fn logs(container: &str, extra: &[&str]) -> Result<String> {
     CliDocker.logs(container, extra)
@@ -202,7 +312,7 @@ pub fn rm_force(container: &str) -> Result<()> {
     CliDocker.rm_force(container)
 }
 pub fn pull(image: &str) -> Result<()> {
-    CliDocker.pull(image)
+    CliDocker.pull(image).map_err(anyhow::Error::new)
 }
 
 pub fn require_installed() -> Result<()> {
@@ -231,28 +341,62 @@ pub fn check_kvm() -> Result<()> {
     Ok(())
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Preflight checks that return LaunchError directly — used by the launch
+// path so the frontend gets a structured error instead of a string.
+// ──────────────────────────────────────────────────────────────────────────
+
+pub fn preflight_kvm() -> std::result::Result<(), LaunchError> {
+    if Path::new("/dev/kvm").exists() {
+        Ok(())
+    } else {
+        Err(LaunchError::KvmDenied)
+    }
+}
+
+pub fn preflight_docker_installed() -> std::result::Result<(), LaunchError> {
+    which::which("docker")
+        .map(|_| ())
+        .map_err(|_| LaunchError::DockerMissing)
+}
+
+pub fn preflight_docker_daemon() -> std::result::Result<(), LaunchError> {
+    let ok = Command::new("docker")
+        .arg("info")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(LaunchError::DockerDaemonDown)
+    }
+}
+
+pub fn preflight_freerdp() -> std::result::Result<(), LaunchError> {
+    which::which("xfreerdp3")
+        .map(|_| ())
+        .map_err(|_| LaunchError::FreeRdpMissing)
+}
+
 #[cfg(test)]
 pub mod mock {
     //! Test double: records every call and returns scripted values.
 
-    use super::DockerClient;
-    use anyhow::{bail, Result};
+    use super::{DockerClient, LaunchError};
+    use anyhow::Result;
     use std::cell::RefCell;
     use std::collections::HashMap;
 
     #[derive(Default)]
     pub struct MockDocker {
-        /// Container name → simulated `docker ps` State string (e.g. "running",
-        /// "exited", "paused"). Missing entries default to "absent".
         pub statuses: RefCell<HashMap<String, String>>,
-        /// Container × needle → simulated logs_contains result.
         pub logs_seed: RefCell<HashMap<(String, String), bool>>,
-        /// Ordered method calls captured for assertion (e.g. `"rm_force:winbox-x"`).
         pub calls: RefCell<Vec<String>>,
-        /// If set, every `compose_run` returns this error verbatim.
-        pub fail_compose: RefCell<Option<String>>,
-        /// If set, every `pull` returns this error.
-        pub fail_pull: RefCell<Option<String>>,
+        pub fail_compose: RefCell<Option<LaunchError>>,
+        pub fail_pull: RefCell<Option<LaunchError>>,
     }
 
     impl MockDocker {
@@ -269,8 +413,8 @@ pub mod mock {
                 .borrow_mut()
                 .insert((container.to_string(), needle.to_string()), value);
         }
-        pub fn set_compose_failure(&self, msg: &str) {
-            *self.fail_compose.borrow_mut() = Some(msg.to_string());
+        pub fn set_compose_failure(&self, err: LaunchError) {
+            *self.fail_compose.borrow_mut() = Some(err);
         }
         pub fn calls(&self) -> Vec<String> {
             self.calls.borrow().clone()
@@ -289,13 +433,15 @@ pub mod mock {
                 .cloned()
                 .unwrap_or_else(|| "absent".into())
         }
-        fn compose_run(&self, profile: &str, action_args: &[&str]) -> Result<()> {
+        fn compose_run(
+            &self,
+            profile: &str,
+            action_args: &[&str],
+        ) -> std::result::Result<(), LaunchError> {
             self.record("compose", &format!("{}:{}", profile, action_args.join(" ")));
-            if let Some(msg) = self.fail_compose.borrow().clone() {
-                bail!("{}", msg);
+            if let Some(err) = self.fail_compose.borrow().clone() {
+                return Err(err);
             }
-            // Side effect: simulate "container created and running" so subsequent
-            // status() calls behave as expected without test boilerplate.
             if action_args.first() == Some(&"up") {
                 self.statuses
                     .borrow_mut()
@@ -342,10 +488,10 @@ pub mod mock {
             self.statuses.borrow_mut().remove(container);
             Ok(())
         }
-        fn pull(&self, image: &str) -> Result<()> {
+        fn pull(&self, image: &str) -> std::result::Result<(), LaunchError> {
             self.record("pull", image);
-            if let Some(msg) = self.fail_pull.borrow().clone() {
-                bail!("{}", msg);
+            if let Some(err) = self.fail_pull.borrow().clone() {
+                return Err(err);
             }
             Ok(())
         }
@@ -355,7 +501,7 @@ pub mod mock {
 #[cfg(test)]
 mod tests {
     use super::mock::MockDocker;
-    use super::DockerClient;
+    use super::*;
 
     #[test]
     fn mock_records_calls_in_order() {
@@ -373,7 +519,6 @@ mod tests {
                 "compose:foo:up -d".to_string(),
             ]
         );
-        // compose_run "up" should have transitioned the simulated status.
         assert_eq!(docker.container_status("winbox-foo"), "running");
     }
 
@@ -384,10 +529,58 @@ mod tests {
     }
 
     #[test]
-    fn mock_compose_failure_propagates() {
+    fn mock_compose_failure_propagates_launch_error() {
         let docker = MockDocker::new();
-        docker.set_compose_failure("simulated EACCES");
+        docker.set_compose_failure(LaunchError::PortConflict { port: 3389 });
         let err = docker.compose_run("foo", &["up", "-d"]).unwrap_err();
-        assert!(err.to_string().contains("simulated EACCES"));
+        assert_eq!(err.code(), "port_conflict");
+    }
+
+    #[test]
+    fn classify_recognizes_port_conflict() {
+        let stderr = "Error response from daemon: driver failed programming external connectivity \
+                      on endpoint winbox-foo: Bind for 127.0.0.1:3389 failed: port is already allocated";
+        match classify_compose_stderr(stderr) {
+            LaunchError::PortConflict { port } => assert_eq!(port, 3389),
+            other => panic!("expected PortConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_recognizes_bind_address_already_in_use() {
+        let stderr = "listen tcp 127.0.0.1:8006: bind: address already in use";
+        match classify_compose_stderr(stderr) {
+            LaunchError::PortConflict { port } => assert_eq!(port, 8006),
+            other => panic!("expected PortConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_recognizes_daemon_down() {
+        let stderr = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. \
+                      Is the docker daemon running?";
+        assert!(matches!(
+            classify_compose_stderr(stderr),
+            LaunchError::DockerDaemonDown
+        ));
+    }
+
+    #[test]
+    fn classify_recognizes_image_pull_failed() {
+        let stderr =
+            "Error response from daemon: pull access denied for dockurr/windows, repository does not exist";
+        match classify_compose_stderr(stderr) {
+            LaunchError::ImagePullFailed { image, .. } => assert_eq!(image, "dockurr/windows"),
+            other => panic!("expected ImagePullFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_unknown_returns_other() {
+        let stderr = "something totally unexpected blew up";
+        assert!(matches!(
+            classify_compose_stderr(stderr),
+            LaunchError::Other { .. }
+        ));
     }
 }
