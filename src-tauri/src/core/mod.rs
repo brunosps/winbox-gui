@@ -10,6 +10,7 @@ pub mod gpu_hooks;
 pub mod health;
 pub mod host;
 pub mod image_family;
+pub mod launch_error;
 pub mod oem;
 pub mod paths;
 pub mod ports;
