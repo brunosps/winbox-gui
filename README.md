@@ -57,6 +57,13 @@ npm run build
 
 Artefatos ficam em `src-tauri/target/release/bundle/` quando bundling estiver ativo.
 
+## Problemas comuns?
+
+Veja [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — cobre os 4 sintomas
+mais frequentes (FreeRDP ausente, tela preta no VNC por GPU
+passthrough, conflito de container name, timeout do primeiro boot do
+Windows). Para detalhes internos, veja [docs/DEBUGGING.md](docs/DEBUGGING.md).
+
 ## Funcionalidades
 
 - Perfis Windows com RDP e bundles PowerShell.
