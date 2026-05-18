@@ -445,27 +445,110 @@ fn open_web_vnc(app: AppHandle, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop_profile(name: String) -> Result<String, String> {
-    commands::lifecycle::stop(&name).map_err(|e| e.to_string())?;
-    Ok(format!("stopped {}", name))
+async fn stop_profile(app: AppHandle, name: String) -> Result<String, String> {
+    // docker stop -t 120 — Windows graceful shutdown can take ~minutes. Run
+    // on a blocking thread and emit progress so the UI shows a spinner
+    // instead of locking up the Tauri runtime.
+    emit_progress(
+        &app,
+        &name,
+        "stop",
+        "stopping",
+        "running",
+        "Desligando container (pode levar até 2min)...",
+    );
+    let n = name.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || commands::lifecycle::stop(&n)).await;
+    let res = match join {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let step = if res.is_ok() { "complete" } else { "failed" };
+    let status = if res.is_ok() { "success" } else { "error" };
+    let msg = res
+        .as_ref()
+        .map(|_| "Container desligado.".into())
+        .unwrap_or_else(|e| e.clone());
+    emit_progress(&app, &name, "stop", step, status, &msg);
+    res.map(|_| format!("stopped {}", name))
 }
 
 #[tauri::command]
-fn kill_profile(name: String) -> Result<String, String> {
-    commands::lifecycle::kill(&name).map_err(|e| e.to_string())?;
-    Ok(format!("killed {}", name))
+async fn kill_profile(app: AppHandle, name: String) -> Result<String, String> {
+    emit_progress(
+        &app,
+        &name,
+        "kill",
+        "killing",
+        "running",
+        "Forçando parada do container...",
+    );
+    let n = name.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || commands::lifecycle::kill(&n)).await;
+    let res = match join {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let step = if res.is_ok() { "complete" } else { "failed" };
+    let status = if res.is_ok() { "success" } else { "error" };
+    let msg = res
+        .as_ref()
+        .map(|_| "Container forçado a parar.".into())
+        .unwrap_or_else(|e| e.clone());
+    emit_progress(&app, &name, "kill", step, status, &msg);
+    res.map(|_| format!("killed {}", name))
 }
 
 #[tauri::command]
-fn pause_profile(name: String) -> Result<String, String> {
-    commands::lifecycle::pause(&name).map_err(|e| e.to_string())?;
-    Ok(format!("paused {}", name))
+async fn pause_profile(app: AppHandle, name: String) -> Result<String, String> {
+    emit_progress(
+        &app,
+        &name,
+        "pause",
+        "pausing",
+        "running",
+        "Pausando container...",
+    );
+    let n = name.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || commands::lifecycle::pause(&n)).await;
+    let res = match join {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let step = if res.is_ok() { "complete" } else { "failed" };
+    let status = if res.is_ok() { "success" } else { "error" };
+    let msg = res
+        .as_ref()
+        .map(|_| "Container pausado.".into())
+        .unwrap_or_else(|e| e.clone());
+    emit_progress(&app, &name, "pause", step, status, &msg);
+    res.map(|_| format!("paused {}", name))
 }
 
 #[tauri::command]
-fn resume_profile(name: String) -> Result<String, String> {
-    commands::lifecycle::resume(&name).map_err(|e| e.to_string())?;
-    Ok(format!("resumed {}", name))
+async fn resume_profile(app: AppHandle, name: String) -> Result<String, String> {
+    emit_progress(
+        &app,
+        &name,
+        "resume",
+        "resuming",
+        "running",
+        "Retomando container...",
+    );
+    let n = name.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || commands::lifecycle::resume(&n)).await;
+    let res = match join {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let step = if res.is_ok() { "complete" } else { "failed" };
+    let status = if res.is_ok() { "success" } else { "error" };
+    let msg = res
+        .as_ref()
+        .map(|_| "Container retomado.".into())
+        .unwrap_or_else(|e| e.clone());
+    emit_progress(&app, &name, "resume", step, status, &msg);
+    res.map(|_| format!("resumed {}", name))
 }
 
 #[tauri::command]
@@ -517,9 +600,29 @@ async fn install_profile(app: AppHandle, params: InstallArgs) -> Result<Operatio
 }
 
 #[tauri::command]
-fn remove_profile(name: String) -> Result<String, String> {
-    commands::lifecycle::remove(&name).map_err(|e| e.to_string())?;
-    Ok(format!("removed {}", name))
+async fn remove_profile(app: AppHandle, name: String) -> Result<String, String> {
+    emit_progress(
+        &app,
+        &name,
+        "remove",
+        "removing",
+        "running",
+        "Removendo container e arquivos do perfil...",
+    );
+    let n = name.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || commands::lifecycle::remove(&n)).await;
+    let res = match join {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let step = if res.is_ok() { "complete" } else { "failed" };
+    let status = if res.is_ok() { "success" } else { "error" };
+    let msg = res
+        .as_ref()
+        .map(|_| "Perfil removido.".into())
+        .unwrap_or_else(|e| e.clone());
+    emit_progress(&app, &name, "remove", step, status, &msg);
+    res.map(|_| format!("removed {}", name))
 }
 
 #[tauri::command]
