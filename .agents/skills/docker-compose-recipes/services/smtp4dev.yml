@@ -1,0 +1,27 @@
+# smtp4dev — Windows-friendly SMTP capture, .NET-based
+# Env vars: SMTP4DEV_SMTP_PORT (default 2525), SMTP4DEV_UI_PORT (default 5000)
+# Application-side SMTP config:
+#   SMTP_HOST=smtp4dev ; SMTP_PORT=25 (internal) ; SMTP_USER= ; SMTP_PASSWORD= ; SMTP_SECURE=false
+
+smtp4dev:
+  image: rnwood/smtp4dev:v3
+  restart: unless-stopped
+  ports:
+    - "${SMTP4DEV_SMTP_PORT:-2525}:25"
+    - "${SMTP4DEV_UI_PORT:-5000}:80"
+  environment:
+    ServerOptions__HostName: smtp4dev
+  volumes:
+    - smtp4dev_data:/smtp4dev
+  healthcheck:
+    test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:80"]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+# volumes:
+#   smtp4dev_data: {}
+#
+# Prod notes:
+# - DEV ONLY. Do not ship to prod.

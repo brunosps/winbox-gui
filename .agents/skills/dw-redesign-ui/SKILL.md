@@ -1,6 +1,6 @@
 ---
 name: dw-redesign-ui
-description: "Analyze, propose, and implement frontend page/component redesigns with design system integration"
+description: "Audits a frontend page, proposes design directions you choose from, then ships the redesign."
 ---
 <system_instructions>
 Source of truth: `.dw/commands/dw-redesign-ui.md`

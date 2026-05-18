@@ -1,0 +1,27 @@
+# Mailpit — modern alternative to MailHog (active maintenance, full-text search, REST API)
+# Env vars: MAILPIT_SMTP_PORT (default 1025), MAILPIT_UI_PORT (default 8025)
+# Application-side SMTP config: same as MailHog (drop-in replacement)
+
+mailpit:
+  image: axllent/mailpit:latest
+  restart: unless-stopped
+  ports:
+    - "${MAILPIT_SMTP_PORT:-1025}:1025"
+    - "${MAILPIT_UI_PORT:-8025}:8025"
+  environment:
+    MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-500}
+    MP_DATABASE: /data/mailpit.db
+  volumes:
+    - mailpit_data:/data
+  healthcheck:
+    test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8025"]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+# volumes:
+#   mailpit_data: {}
+#
+# Prod notes:
+# - DEV ONLY. Do not ship to prod. See mailhog.yml notes for prod email guidance.

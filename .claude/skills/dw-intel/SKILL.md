@@ -1,6 +1,6 @@
 ---
 name: dw-intel
-description: "Query codebase intelligence to understand patterns, conventions, and architecture"
+description: "Codebase intelligence: query mode (default) answers questions citing .dw/intel/ + .dw/rules/; --build mode (re)builds the index."
 ---
 
 Read and follow ALL instructions in `.dw/commands/dw-intel.md`.

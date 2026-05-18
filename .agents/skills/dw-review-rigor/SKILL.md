@@ -1,12 +1,6 @@
 ---
 name: dw-review-rigor
-description: |
-  Applies review discipline to code-review and analysis commands:
-  de-duplicates issues, orders by severity, verifies intent before flagging,
-  prioritizes signal over volume, and skips concerns that linters already
-  catch. Invoked from dw-code-review, dw-review-implementation, and
-  dw-refactoring-analysis. Do not use for fetching reviews from external
-  providers or for executing fixes.
+description: Five rules for review output — dedupe, severity-order, verify intent, skip linter noise, prefer signal over volume.
 allowed-tools:
   - Read
   - Grep
@@ -20,7 +14,7 @@ A set of rules the caller applies while producing a review report. This skill do
 
 ## When Invoked
 
-By `/dw-code-review`, `/dw-review-implementation`, `/dw-refactoring-analysis`. The caller has already identified a scope (files, a PR, a codebase area). This skill governs how findings are selected, deduplicated, ordered, and phrased.
+By `/dw-review --code-only`, `/dw-review --coverage-only`, `/dw-brainstorm --refactor`. The caller has already identified a scope (files, a PR, a codebase area). This skill governs how findings are selected, deduplicated, ordered, and phrased.
 
 ## Required Inputs
 
@@ -128,9 +122,9 @@ The caller emits:
 
 ## Integration With Other dev-workflow Commands
 
-- `/dw-code-review` — applies all five rules to its Level-3 review output; uses prior reports in `.dw/spec/*/reviews/` to dedupe across rounds.
-- `/dw-review-implementation` — applies de-dup + severity-ordering when listing gaps between PRD requirements and code.
-- `/dw-refactoring-analysis` — applies rules 1, 2, 4, 5 when cataloging code smells (rule 3 adapts: a "smell" with a justifying ADR becomes a `low` finding at most).
+- `/dw-review --code-only` — applies all five rules to its Level-3 review output; uses prior reports in `.dw/spec/*/reviews/` to dedupe across rounds.
+- `/dw-review --coverage-only` — applies de-dup + severity-ordering when listing gaps between PRD requirements and code.
+- `/dw-brainstorm --refactor` — applies rules 1, 2, 4, 5 when cataloging code smells (rule 3 adapts: a "smell" with a justifying ADR becomes a `low` finding at most).
 
 Callers should mention this skill in their "Skills Complementares" section.
 
@@ -140,6 +134,6 @@ Ported from Compozy's `cy-review-round` skill (`/tmp/compozy/.agents/skills/cy-r
 
 - No `reviews-NNN/` directory convention — dev-workflow reviews already persist in `.dw/spec/*/reviews/` per command's existing contract.
 - The five rules are extracted here so three different dev-workflow review commands can share the discipline without duplicating it.
-- No issue-file frontmatter (Compozy uses it to interoperate with its remediation engine; dev-workflow's remediation is manual or via `/dw-fix-qa`).
+- No issue-file frontmatter (Compozy uses it to interoperate with its remediation engine; dev-workflow's remediation is manual or via `/dw-qa --fix`).
 
 Credit: Compozy project (https://github.com/compozy/compozy).

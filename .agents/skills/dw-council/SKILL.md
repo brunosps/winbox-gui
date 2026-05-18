@@ -1,13 +1,6 @@
 ---
 name: dw-council
-description: |
-  Orchestrates a multi-advisor debate (3-5 archetypes) to stress-test
-  high-stakes product, architecture, or scope decisions. Uses parallel
-  subagents with steel-manning, concession tracking, and dissent-preserving
-  synthesis. Invoked opt-in via `--council` flag from dw-brainstorm and
-  dw-create-techspec, or standalone when the user explicitly needs a
-  rigorous debate. Do not use for small decisions, routine implementation,
-  or when a single answer is already obvious.
+description: Multi-advisor debate (3-5 archetypes) with steel-manning and dissent preserved, for high-stakes product or architecture calls.
 allowed-tools:
   - Read
   - Task
@@ -29,7 +22,7 @@ A real embedded subagent workflow — not inline roleplay. Each archetype is dis
 
 - Low-stakes or obviously-reversible decisions (a council is expensive; reserve for meaningful debates)
 - Decisions already covered by an existing ADR
-- When a single specialized skill suffices (e.g., `security-review` for auth concerns, `ui-ux-pro-max` for visual direction)
+- When a single specialized skill suffices (e.g., `security-review` for auth concerns, `dw-ui-discipline` for visual direction)
 
 ## Required Inputs
 
@@ -147,7 +140,7 @@ Record as:
 
 ## Output Location
 
-- **Embedded mode** (invoked by `/dw-brainstorm --council` or `/dw-create-techspec --council`): return the synthesis inline; the caller extracts what it needs for the parent artifact (PRD, techspec, ADR).
+- **Embedded mode** (invoked by `/dw-brainstorm --council` or `/dw-plan techspec --council`): return the synthesis inline; the caller extracts what it needs for the parent artifact (PRD, techspec, ADR).
 - **Standalone mode**: save to `.dw/spec/<prd-slug>/council-YYYYMMDD.md` (if a PRD is active) or present inline if no PRD context exists. If the decision warrants a permanent record, suggest `/dw-adr` as the next step.
 
 ## Debate Protocols (non-negotiable)
@@ -167,7 +160,7 @@ Record as:
 ## Integration With Other dw-* Commands
 
 - **`/dw-brainstorm --council`** (opt-in): invokes the council after the normal brainstorm to stress-test the top 2-3 options before recommending
-- **`/dw-create-techspec --council`** (opt-in): invokes the council on the primary architectural decision of the techspec before finalizing
+- **`/dw-plan techspec --council`** (opt-in): invokes the council on the primary architectural decision of the techspec before finalizing
 - **Standalone** `/dw-council "<dilemma>"` (if registered as a command — currently this is a bundled skill invoked by the two above; it can be promoted to a command in a future release if direct usage becomes common)
 
 The `--council` flag is **additive**: omitting it produces the normal brainstorm/techspec flow. Including it adds a debate section to the output.

@@ -1,6 +1,6 @@
 ---
 name: dw-adr
-description: "Record an Architecture Decision Record (ADR) for a non-trivial decision during PRD execution"
+description: "Records an architectural decision and the trade-offs accepted, before they get lost."
 ---
 <system_instructions>
 Source of truth: `.dw/commands/dw-adr.md`

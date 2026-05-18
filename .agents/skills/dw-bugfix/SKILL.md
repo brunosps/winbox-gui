@@ -1,6 +1,6 @@
 ---
 name: dw-bugfix
-description: "Analyze and fix bugs with automatic triage (bug vs feature vs scope)"
+description: "Trigger when user reports a bug, pastes an error, or describes broken behavior. Triages with three questions, then fixes or routes to PRD."
 ---
 <system_instructions>
 Source of truth: `.dw/commands/dw-bugfix.md`

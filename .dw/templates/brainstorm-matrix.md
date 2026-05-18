@@ -4,16 +4,24 @@
 
 {{CONTEXT_DESCRIPTION}}
 
+## Product Inventory
+
+<!-- Existing product features mapped (product level, not code level). Fill in by reading .dw/spec/prd-*/prd.md and .dw/rules/index.md. If greenfield, write "greenfield". -->
+
+- **[feature 1]** — `.dw/spec/prd-<slug>/prd.md` — status
+- **[feature 2]** — `.dw/rules/index.md#module-Y`
+- ...
+
 ## Options Matrix
 
 | Criteria | Option A: {{NAME_A}} | Option B: {{NAME_B}} | Option C: {{NAME_C}} |
 |----------|----------------------|----------------------|----------------------|
-| **Approach** | | | |
+| **Type & Related Feature** | `[IMPROVES: <feat>]` \| `[CONSOLIDATES: <A>+<B>]` \| `[NEW]` | same | same |
+| **Approach (product)** | | | |
 | **Effort** | Low / Medium / High | Low / Medium / High | Low / Medium / High |
 | **Risk** | Low / Medium / High | Low / Medium / High | Low / Medium / High |
-| **Scalability** | | | |
-| **Maintainability** | | | |
-| **Dependencies** | | | |
+| **User value** | | | |
+| **Dependencies (on other features)** | | | |
 
 ## Trade-offs
 
@@ -41,4 +49,4 @@
 ## Next Steps
 
 - [ ] Validate with stakeholders
-- [ ] Create PRD: `/dw-create-prd`
+- [ ] Create PRD: `/dw-plan prd`

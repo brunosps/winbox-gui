@@ -1,13 +1,6 @@
 ---
 name: dw-memory
-description: |
-  Maintains workflow-scoped memory for dev-workflow PRD runs using
-  .dw/spec/prd-<name>/MEMORY.md (shared) and .dw/spec/prd-<name>/tasks/<N>_memory.md
-  (task-local). Use when a dev-workflow command needs to persist or recall
-  durable cross-task context (decisions, constraints, risks) across task
-  executions. Invoked from dw-run-task, dw-run-plan, dw-autopilot, and
-  dw-resume. Do not use for PR review remediation, user preferences, or
-  event-log summarization.
+description: Two-tier workflow memory (shared + per-task) with promotion test, so cross-task context survives without bloating files.
 allowed-tools:
   - Read
   - Write
@@ -152,6 +145,29 @@ When flagged for compaction, apply inline:
 4. **Rewrite** retained items as short factual bullets. No narrative logs, no chronological play-by-play.
 5. Keep the default section headings intact. Remove empty sections only if truly unused.
 
+## Context Budget
+
+Memory is part of a broader **context budget** the agent must respect during execution. A blown budget degrades reasoning before any output is produced — the model starts missing requirements, drops constraints, and reverts to averaged-over-training answers. Full guidance: [`references/context-budget.md`](references/context-budget.md).
+
+**Targets:**
+
+- **Total active context:** under **40k tokens** (rough working budget across PRD + TechSpec + tasks + MEMORY.md + per-task memory + open files).
+- **Reserve:** at least **120k tokens** of headroom for actual reasoning, tool output, and the model's response stream.
+- **Hard ceiling per memory file:** `MEMORY.md` ≤ 6KB; `<N>_memory.md` ≤ 3KB. Past those, compact instead of growing.
+
+**Anti-co-load rules** (apply on every load):
+
+1. Never load two PRD specs in the same context. If switching PRDs, drop the previous PRD's spec/techspec/tasks references from the active set.
+2. Never load multiple archived `.dw/bugfixes/` SUMMARY.md files together — load only what's needed for the active fix or query.
+3. Never load `.dw/intel/files.json` and `.dw/intel/deps.json` simultaneously when answering a single question — pick the primary per query shape (see `dw-codebase-intel/references/query-patterns.md`).
+4. Never load a design proposal AND the prior design's full text — if comparing, summarize the prior into 5-10 lines.
+
+**Monitoring signal:**
+
+If the agent finds itself reading large files repeatedly or summarizing the same fact across multiple turns, that's a budget signal. Compact memory and explicitly drop unrelated loaded context before proceeding. Note this in `MEMORY.md` under Handoff Notes so the next task starts lean.
+
+This budget is doctrine, not a hard gate. No command currently rejects work for exceeding 40k. The discipline lives here because future sessions read this skill first.
+
 ## Error Handling
 
 - If any caller-provided memory path is missing, stop and report the mismatch instead of guessing another path.
@@ -160,10 +176,9 @@ When flagged for compaction, apply inline:
 
 ## Integration With Other dev-workflow Commands
 
-- `/dw-run-task` — reads memory before coding; updates `<N>_memory.md` during; runs promotion test + updates `MEMORY.md` at the end.
-- `/dw-run-plan` — runs promotion + compaction between tasks, so each task starts with clean shared state.
-- `/dw-autopilot` — threads memory through every phase (brainstorm → PRD → techspec → tasks → execution).
-- `/dw-resume` — reads `MEMORY.md` first to reconstitute cross-session context, then the active task's memory.
+- `/dw-run` — reads memory before coding; updates `<N>_memory.md` during; runs promotion test + updates `MEMORY.md` at the end.
+- `/dw-run` — runs promotion + compaction between tasks, so each task starts with clean shared state.
+- `/dw-autopilot` — threads memory through every phase (brainstorm → PRD → techspec → tasks → execution); on re-invocation reads `MEMORY.md` first to reconstitute cross-session context.
 
 Callers should mention this skill in their "Skills Complementares" section.
 
@@ -173,6 +188,8 @@ Ported from Compozy's `cy-workflow-memory` skill (`/tmp/compozy/.agents/skills/c
 
 - Paths are `.dw/spec/<prd-slug>/` instead of `.compozy/tasks/<name>/`.
 - Task-local file is `<N>_memory.md` next to `<N>_task.md` (mirrors the existing dev-workflow task layout).
-- Inline Compaction Rules (Compozy keeps them in `references/memory-guidelines.md`); if the rule set grows, extract a `references/` directory later.
+- Inline Compaction Rules (Compozy keeps them in `references/memory-guidelines.md`); the budget discipline was extracted to `references/context-budget.md` because it's about model behavior, not file management.
 
 Credit: Compozy project (https://github.com/compozy/compozy).
+
+The Context Budget section adapts the context-loading discipline from [`tech-leads-club/agent-skills/tlc-spec-driven`](https://github.com/tech-leads-club/agent-skills/tree/main/packages/skills-catalog/skills/(development)/tlc-spec-driven) (CC-BY-4.0, Felipe Rodrigues). The target, the anti-co-load rules, and the "monitoring signal" framing come from there; the integration with two-tier memory and the specific file ceilings are dev-workflow-specific.

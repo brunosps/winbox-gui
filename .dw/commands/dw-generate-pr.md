@@ -4,18 +4,22 @@ You are an assistant specialized in creating well-documented Pull Requests. Your
 ## When to Use
 - Use when creating a Pull Request from a feature or bugfix branch to main/develop
 - Do NOT use when changes are not yet committed (use `/dw-commit` first)
-- Do NOT use when code review has not been done (use `/dw-code-review` first)
+- Do NOT use when code review has not been done (use `/dw-review --code-only` first)
 
 ## Pipeline Position
-**Predecessor:** `/dw-code-review` or `/dw-commit` | **Successor:** (merge)
+**Predecessor:** `/dw-review --code-only` or `/dw-commit` | **Successor:** (merge)
 
 ## Complementary Skills
 
 | Skill | Trigger |
 |-------|---------|
 | `dw-verify` | **ALWAYS** — invoked before `git push`. Without a VERIFICATION REPORT PASS in the current session AFTER the last code edit, the PR **CANNOT** be created. |
+| `dw-git-discipline` | **ALWAYS** — validates branch naming (`<type>/<scope>` kebab-case), atomic-commit history (each commit single-intent, conventional message), branch lifetime (flag if >7 days old), and PR scope (suggest split if diff > ~400 lines). PR description follows summary + test plan structure, not a `git log` dump. |
+| `/dw-secure-audit` | **ALWAYS for TS/Python/C#/Rust projects** — `security-check.md` with status ≠ REJECTED is required for supported-language projects. |
 
-<critical>Hard gate: if the current session has no VERIFICATION REPORT PASS from `dw-verify` produced AFTER the last edit/commit, STOP and invoke `dw-verify` before proceeding. A PR is a permanent artifact — it demands the highest verification standard.</critical>
+<critical>Hard gate 1 (verify): if the current session has no VERIFICATION REPORT PASS from `dw-verify` produced AFTER the last edit/commit, STOP and invoke `dw-verify` before proceeding. A PR is a permanent artifact — it demands the highest verification standard.</critical>
+
+<critical>Hard gate 2 (security): for TS/Python/C#/Rust projects, if `{{PRD_PATH}}/security-check.md` is missing OR has REJECTED status, STOP and invoke `/dw-secure-audit` before proceeding. HIGH/CRITICAL vulnerabilities CANNOT reach the PR. For other languages (Go, Java, etc.), this gate is skipped with a note.</critical>
 
 ## Usage
 

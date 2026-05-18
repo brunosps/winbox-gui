@@ -3,7 +3,7 @@ You are an assistant specialized in mapping real functionalities of screens, flo
 
 ## When to Use
 - Use when mapping screens, flows, or modules into a comprehensive functional dossier with E2E test coverage and optional video tours
-- Do NOT use when only running QA tests against existing requirements (use `/dw-run-qa`)
+- Do NOT use when only running QA tests against existing requirements (use `/dw-qa`)
 - Do NOT use when the project has not been set up yet
 
 ## Pipeline Position
@@ -55,10 +55,10 @@ Works best with project analyzed by `/dw-analyze-project`
 
 When available in the project under `./.agents/skills/`, use these skills as operational support without replacing this command as source of truth:
 
-- `webapp-testing`: support for structuring E2E flows, local retests, and evidence collection
+- `dw-testing-discipline`: support for structuring E2E flows (`references/playwright-recipes.md`), evidence collection patterns, and applying core rules + selector hierarchy to any test the doc references
 - `remotion-best-practices`: mandatory support when there is a final human video, captions, composition, transitions, FFmpeg, or Remotion
 - `humanizer`: mandatory support for reviewing and naturalizing all captions, `.srt` files, descriptive texts, and any human-facing writing before final delivery
-- `ui-ux-pro-max`: use when documenting visual patterns, design system choices, and UI style consistency across screens
+- `dw-ui-discipline`: use when documenting visual patterns — the state matrix and scene sentence become part of each screen's overview section
 
 ## Mandatory Browser Tools
 

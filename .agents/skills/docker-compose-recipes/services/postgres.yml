@@ -1,0 +1,30 @@
+# Postgres 16 — relational DB
+# Env vars referenced: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT (default 5432)
+# Application-side: derive DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+postgres:
+  image: postgres:16-alpine
+  restart: unless-stopped
+  environment:
+    POSTGRES_USER: ${POSTGRES_USER:-app}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+    POSTGRES_DB: ${POSTGRES_DB:-app}
+  ports:
+    - "${POSTGRES_PORT:-5432}:5432"
+  volumes:
+    - postgres_data:/var/lib/postgresql/data
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 5s
+
+# volumes block to merge:
+# volumes:
+#   postgres_data: {}
+#
+# Prod notes:
+# - Move POSTGRES_PASSWORD to a secret (file_env or external secrets manager).
+# - Drop the public port mapping; expose only via internal network or a bastion.
+# - Pin to a specific patch version in production manifests (e.g., postgres:16.4-alpine).

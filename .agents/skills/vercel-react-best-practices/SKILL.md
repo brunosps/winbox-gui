@@ -1,6 +1,8 @@
 ---
 name: vercel-react-best-practices
-description: React and Next.js performance optimization guidelines from Vercel Engineering. This skill should be used when writing, reviewing, or refactoring React/Next.js code to ensure optimal performance patterns. Triggers on tasks involving React components, Next.js pages, data fetching, bundle optimization, or performance improvements.
+description: Use for React/Next.js performance optimization. 67 rules across async, bundle, client, render, JS micro-perf. Triggers on React components, Next.js pages, data fetching, perf review, hydration issues.
+allowed-tools:
+  - Read
 license: MIT
 metadata:
   author: vercel
@@ -144,3 +146,7 @@ Each rule file contains:
 ## Full Compiled Document
 
 For the complete guide with all rules expanded: `AGENTS.md`
+
+## References
+
+- `references/perf-discipline.md` — workflow discipline (measure → identify → fix → verify → guard) that wraps the per-rule recipes above. Use when tackling performance work; cite the metric and tool before applying any rule. Adapted from [`addyosmani/agent-skills/performance-optimization`](https://github.com/addyosmani/agent-skills/tree/main/performance-optimization) (MIT).

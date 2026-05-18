@@ -78,7 +78,9 @@ npx -y @brunosps00/dev-workflow@latest update --lang=$DETECTED_LANG
 The `update` command overwrites managed files and PRESERVES:
 - `.dw/rules/` (user rules)
 - `.dw/spec/` (in-progress PRDs and tasks)
-- `.planning/` (user data)
+- `.dw/intel/` (codebase index from `/dw-intel --build`)
+
+The `update` command also runs the GSD migration step automatically — if a project has legacy `.planning/` (from prior GSD usage), the contents are migrated to `.dw/intel/`, `.dw/spec/active-session.md`, `.dw/spec/quick/`, etc., and `.planning/` is renamed to `.planning.gsd-archive-<DATE>/` for inspection. The `.claude/commands/gsd/`, `.claude/agents/gsd-*.md`, `.claude/hooks/gsd-*.js`, and `.claude/gsd-file-manifest.json` files are removed during the migration.
 
 If the update fails (network error, permission, package unavailable): report the error to the user and STOP. Do NOT attempt manual workarounds like copying files by hand.
 

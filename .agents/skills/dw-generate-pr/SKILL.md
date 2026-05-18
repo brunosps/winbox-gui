@@ -1,6 +1,6 @@
 ---
 name: dw-generate-pr
-description: "Generate a Pull Request with structured description"
+description: "Trigger when commits are ready and the branch needs a PR. Pushes branch and opens PR with summary + test plan + hard verify gate."
 ---
 <system_instructions>
 Source of truth: `.dw/commands/dw-generate-pr.md`

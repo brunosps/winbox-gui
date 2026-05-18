@@ -3,12 +3,12 @@ You are an architectural-decision recorder. Your job is to create an **Architect
 
 ## When to Use
 - Use when an architectural or design decision has been made and needs to be recorded for future reference (library choice, communication pattern, performance tradeoff, compliance-imposed constraint, etc.)
-- Use during `/dw-create-techspec` or `/dw-run-task` when the rationale for the decision does not fit in the techspec or the task file
+- Use during `/dw-plan techspec` or `/dw-run` when the rationale for the decision does not fit in the techspec or the task file
 - Do NOT use for trivial or cheaply-reversible decisions (variable names, import order)
 - Do NOT use to record bugs or incidents (use `/dw-bugfix` or operational notes)
 
 ## Pipeline Position
-**Predecessor:** any point in the pipeline after `/dw-create-prd` | **Successor:** continue the previous flow (techspec, task, review)
+**Predecessor:** any point in the pipeline after `/dw-plan prd` | **Successor:** continue the previous flow (techspec, task, review)
 
 The ADR is **additive**: it does not replace any pipeline stage. Any existing command can invoke `/dw-adr` when a non-trivial decision needs a permanent record.
 

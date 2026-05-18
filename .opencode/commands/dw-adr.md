@@ -1,5 +1,5 @@
 ---
-description: Record an Architecture Decision Record (ADR) for a non-trivial decision during PRD execution
+description: Records an architectural decision and the trade-offs accepted, before they get lost.
 ---
 Follow ALL instructions in @.dw/commands/dw-adr.md
 

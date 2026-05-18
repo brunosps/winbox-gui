@@ -1,6 +1,6 @@
 # Playwright Test Patterns
 
-Reference for `/dw-run-qa` and `/dw-functional-doc`. Common E2E patterns.
+Reference for `/dw-qa` and `/dw-functional-doc`. Common E2E patterns.
 
 ## 1. Authenticated Navigation
 

@@ -1,0 +1,28 @@
+# Meilisearch — lightweight, opinionated search engine
+# Env vars: MEILI_MASTER_KEY, MEILISEARCH_PORT (default 7700)
+# Application-side: MEILI_HTTP_ADDR=http://meilisearch:7700; MEILI_MASTER_KEY=${MEILI_MASTER_KEY}
+
+meilisearch:
+  image: getmeili/meilisearch:v1.10
+  restart: unless-stopped
+  environment:
+    MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-meili-dev-key-change-me}
+    MEILI_ENV: ${MEILI_ENV:-development}
+    MEILI_NO_ANALYTICS: "true"
+  ports:
+    - "${MEILISEARCH_PORT:-7700}:7700"
+  volumes:
+    - meilisearch_data:/meili_data
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+# volumes:
+#   meilisearch_data: {}
+#
+# Prod notes:
+# - Set MEILI_ENV=production and provide a strong MEILI_MASTER_KEY (≥16 chars).
+# - Never expose Meilisearch directly to the internet without auth + a reverse proxy.

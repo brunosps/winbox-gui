@@ -1,6 +1,6 @@
 ---
 name: dw-help
-description: "Show complete guide of available commands and workflows"
+description: "Lists primary commands and the flows that connect them. Pass --advanced to see internal/hidden commands."
 ---
 <system_instructions>
 Source of truth: `.dw/commands/dw-help.md`

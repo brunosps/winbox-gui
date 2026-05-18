@@ -1,0 +1,23 @@
+# MailHog — DEV-ONLY email capture (NEVER sends real mail)
+# This is the dev-workflow DEFAULT for email-in-dev so the project cannot accidentally email real users.
+# Env vars: MAILHOG_SMTP_PORT (default 1025), MAILHOG_UI_PORT (default 8025)
+# Application-side SMTP config:
+#   SMTP_HOST=mailhog ; SMTP_PORT=1025 ; SMTP_USER= ; SMTP_PASSWORD= ; SMTP_SECURE=false
+
+mailhog:
+  image: mailhog/mailhog:latest
+  restart: unless-stopped
+  ports:
+    - "${MAILHOG_SMTP_PORT:-1025}:1025"
+    - "${MAILHOG_UI_PORT:-8025}:8025"
+  healthcheck:
+    test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8025"]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+# Prod notes:
+# - MailHog must NEVER ship to prod. Replace with a real SMTP relay or transactional email API
+#   (SendGrid, Resend, Postmark, SES) when promoting docker-compose.dev.yml to prod.
+# - Open the UI at http://localhost:8025 to inspect captured mail; nothing leaves the host.

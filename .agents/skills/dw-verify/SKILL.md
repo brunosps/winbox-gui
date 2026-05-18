@@ -1,11 +1,6 @@
 ---
 name: dw-verify
-description: |
-  Enforces fresh verification evidence before any completion, fix, or passing
-  claim — and before commits or PR creation. Use when a dev-workflow command
-  is about to report success, hand off work, or commit code. Invoked from
-  dw-run-task, dw-run-plan, dw-fix-qa, dw-bugfix, dw-code-review, dw-generate-pr,
-  and dw-quick. Do not use for early planning or brainstorming.
+description: Demands fresh verification evidence before any success claim or commit. No PASS report, no claim — no exceptions.
 allowed-tools:
   - Bash
   - Read
@@ -176,13 +171,12 @@ If no verification command exists for the project, state that explicitly in the 
 
 This skill is invoked transparently from:
 
-- `/dw-run-task` — before committing the task's changes
-- `/dw-run-plan` — before Level 2 review and before declaring the plan complete
-- `/dw-fix-qa` — before marking a bug as resolved in `QA/bugs.md`
+- `/dw-run` — before committing the task's changes
+- `/dw-run` — before Level 2 review and before declaring the plan complete
+- `/dw-qa --fix` — before marking a bug as resolved in `QA/bugs.md`
 - `/dw-bugfix` — before claiming the bug is fixed (original symptom no longer reproduces)
-- `/dw-code-review` — before emitting an APPROVED verdict
+- `/dw-review --code-only` — before emitting an APPROVED verdict
 - `/dw-generate-pr` — blocks PR creation if the session has no passing VERIFICATION REPORT post-last-edit
-- `/dw-quick` — before committing the one-off change
 
 Callers should mention this skill in their "Skills Complementares" section so the user sees the dependency.
 

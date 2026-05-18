@@ -1,6 +1,6 @@
 ---
 name: dw-functional-doc
-description: "Generate functional documentation dossier with screen mapping, E2E flows, and Playwright validation"
+description: "Maps screens and user flows into a functional doc, validated end-to-end with Playwright."
 ---
 <system_instructions>
 Source of truth: `.dw/commands/dw-functional-doc.md`

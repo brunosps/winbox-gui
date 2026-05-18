@@ -7,7 +7,13 @@
     - Do NOT use when creating a PR (use `/dw-generate-pr` instead)
 
     ## Pipeline Position
-    **Predecessor:** `/dw-run-task` or `/dw-bugfix` | **Successor:** `/dw-generate-pr`
+    **Predecessor:** `/dw-run` or `/dw-bugfix` | **Successor:** `/dw-generate-pr`
+
+    ## Complementary Skills
+
+    When available in the project under `./.agents/skills/`, use these skills as operational support without replacing this command:
+
+    - `dw-git-discipline`: **ALWAYS** — enforces atomic commits (one logical intent per commit; refactor separate from feature), Conventional Commits format, lint+tests+build green BEFORE the commit, and bans bypassing pre-commit hooks (`--no-verify`) or amending pushed commits. When mixed changes are detected, splits via `git add -p`.
 
     ## Input Variables
 

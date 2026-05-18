@@ -1,0 +1,30 @@
+# MySQL 8 — relational DB
+# Env vars referenced: MYSQL_ROOT_PASSWORD, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE, MYSQL_PORT (default 3306)
+# Application-side: DATABASE_URL=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+
+mysql:
+  image: mysql:8.4
+  restart: unless-stopped
+  command: --default-authentication-plugin=mysql_native_password
+  environment:
+    MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    MYSQL_USER: ${MYSQL_USER:-app}
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD:-app}
+    MYSQL_DATABASE: ${MYSQL_DATABASE:-app}
+  ports:
+    - "${MYSQL_PORT:-3306}:3306"
+  volumes:
+    - mysql_data:/var/lib/mysql
+  healthcheck:
+    test: ["CMD-SHELL", "mysqladmin ping -h localhost -u${MYSQL_USER:-app} -p${MYSQL_PASSWORD:-app}"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 15s
+
+# volumes:
+#   mysql_data: {}
+#
+# Prod notes:
+# - Use secrets for MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD; drop public port.
+# - Consider Percona or MariaDB as drop-in alternatives if licensing is a concern.

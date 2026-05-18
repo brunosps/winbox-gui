@@ -1,0 +1,29 @@
+# RabbitMQ 3 (management) — message broker + UI
+# Env vars: RABBITMQ_USER, RABBITMQ_PASSWORD, RABBITMQ_PORT (default 5672), RABBITMQ_UI_PORT (default 15672)
+# Application-side: AMQP_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+
+rabbitmq:
+  image: rabbitmq:3-management-alpine
+  restart: unless-stopped
+  environment:
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-app}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-app}
+  ports:
+    - "${RABBITMQ_PORT:-5672}:5672"
+    - "${RABBITMQ_UI_PORT:-15672}:15672"
+  volumes:
+    - rabbitmq_data:/var/lib/rabbitmq
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 30s
+
+# volumes:
+#   rabbitmq_data: {}
+#
+# Prod notes:
+# - Drop the management UI port (15672) or put it behind a reverse proxy with auth.
+# - Use rabbitmq:3-alpine (no management) in prod; manage via the cluster API.
+# - Mount a custom rabbitmq.conf for clustering, queue limits, and TLS.
