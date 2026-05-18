@@ -141,6 +141,38 @@ do dockur em tempo real.
 
 ---
 
+## 5. Atalhos do Windows / Linux não chegam ao guest
+
+**Sintoma**: aperto a tecla **Win** dentro da janela RDP e o menu do GNOME/KDE
+do host abre (em vez do menu Iniciar do Windows). Mesma coisa para
+`Alt+Tab`, `Super+L`, etc.
+
+**Por quê**: por padrão o servidor X só envia teclas "normais" para o cliente
+de janela. Teclas com modificadores reservados pelo WM ficam no host. xfreerdp
+contorna isso ativando o **grab de teclado** (`+grab-keyboard`), que faz com
+que TODAS as teclas vão para o guest enquanto a janela RDP estiver focada.
+
+**Fix (Windows)**: já está ativo a partir desta versão. Como **soltar** o grab
+quando quiser usar atalhos do host:
+
+- Aperte **`Right CTRL`** (Ctrl da direita) — xfreerdp libera o teclado e o mouse.
+- Ou simplesmente clique fora da janela RDP.
+
+**Linux via noVNC (navegador)**: o browser não permite capturar a tecla Super
+(restrição de sandbox). Use uma das alternativas:
+
+- Toolbar do noVNC: clique no menu lateral → "Send Key" → "Windows".
+- Cliente VNC nativo: `remmina vnc://127.0.0.1:<WEB_PORT>` (ou tigervnc-viewer)
+  com a opção *grab keyboard* habilitada. A porta 5900 do container expõe VNC
+  raw também — mas só dentro da rede do container. Para acesso direto, mapeie
+  `5900:5900` em `EXTRA_PORTS` do perfil.
+
+**Log de evidência**: tente `Right CTRL` e depois aperte Win. Se ainda não
+funcionar, o servidor RDP do guest pode estar mapeando o keyboard layout
+errado — ajuste o profile language/keyboard.
+
+---
+
 ## Mais
 
 Se nada acima cobre o seu caso, abra um issue com:

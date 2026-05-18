@@ -63,7 +63,9 @@ pub fn launch(profile: &str) -> Result<()> {
         "/microphone",
         "/clipboard",
         "/gfx:AVC444",
-        "-grab-keyboard",
+        // Grab the keyboard so Super/Meta/Alt-Tab forward to Windows
+        // instead of the host WM. Click outside the RDP window to release.
+        "+grab-keyboard",
         "/floatbar:sticky:off,default:visible,show:fullscreen",
     ])
     .arg(format!("/title:Windows ({})", profile));
