@@ -1,7 +1,12 @@
 use std::path::PathBuf;
 
 pub const WINBOX_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const IMAGE: &str = "dockurr/windows";
+// Docker image refs are pinned (not :latest) so reinstalling a profile
+// stays reproducible. Upgrade by bumping these constants intentionally.
+pub const IMAGE_WINDOWS: &str = "dockurr/windows:5.14";
+pub const IMAGE_QEMU: &str = "qemux/qemu:7.29";
+// Legacy alias used by older callers.
+pub const IMAGE: &str = IMAGE_WINDOWS;
 pub const HOST: &str = "127.0.0.1";
 pub const BASE_WEB_PORT: u16 = 8006;
 pub const BASE_RDP_PORT: u16 = 3389;
@@ -25,6 +30,14 @@ pub fn config_dir() -> PathBuf {
 
 pub fn data_dir() -> PathBuf {
     xdg("XDG_DATA_HOME", ".local/share").join("winbox")
+}
+
+pub fn cache_dir() -> PathBuf {
+    xdg("XDG_CACHE_HOME", ".cache").join("winbox")
+}
+
+pub fn profile_rdp_log_file(p: &str) -> PathBuf {
+    cache_dir().join(format!("rdp-{p}.log"))
 }
 
 pub fn apps_dir() -> PathBuf {

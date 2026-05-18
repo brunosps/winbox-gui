@@ -24,7 +24,7 @@ registerLocale("en-US", {
 
   // Card
   "card.launch": "Start",
-  "card.connect": "Connect RDP",
+  "card.connect": "Connect",
   "card.resume": "Resume",
   "card.pause.title": "Pause",
   "card.stop.title": "Shut down",

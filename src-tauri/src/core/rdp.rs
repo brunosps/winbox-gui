@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::fs;
 use std::process::{Command, Stdio};
 
 use super::env_file;
@@ -69,9 +70,21 @@ pub fn launch(profile: &str) -> Result<()> {
     if !scale.is_empty() {
         cmd.arg(scale);
     }
+    let log_path = paths::profile_rdp_log_file(profile);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let log_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("abrindo log RDP {}", log_path.display()))?;
+    let stderr_dup = log_file
+        .try_clone()
+        .with_context(|| format!("clonando handle de log {}", log_path.display()))?;
     cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(stderr_dup))
         .spawn()?;
     Ok(())
 }

@@ -20,7 +20,7 @@ registerLocale("pt-BR", {
   "status.created": "Criada",
 
   "card.launch": "Iniciar",
-  "card.connect": "Conectar RDP",
+  "card.connect": "Conectar",
   "card.resume": "Retomar",
   "card.pause.title": "Pausar",
   "card.stop.title": "Desligar",

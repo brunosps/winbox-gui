@@ -1,5 +1,7 @@
 use anyhow::{bail, Result};
 
+use crate::core::env_file;
+use crate::core::image_family::ImageFamily;
 use crate::core::{desktop, docker, gpu_hooks, paths, profile, snapshots};
 
 pub fn pause(name: &str) -> Result<()> {
@@ -37,7 +39,9 @@ pub fn restart(name: &str) -> Result<()> {
 pub fn update(name: &str) -> Result<()> {
     let snap = snapshots::timestamped_snapshot_name("pre-update");
     snapshots::create(name, &snap)?;
-    docker::pull(paths::IMAGE)?;
+    let env = env_file::read(&paths::profile_env_file(name))?;
+    let image = ImageFamily::from_env_map(&env).docker_image();
+    docker::pull(image)?;
     gpu_hooks::prepare_for_start(name)?;
     docker::compose_run(name, &["up", "-d"])
 }

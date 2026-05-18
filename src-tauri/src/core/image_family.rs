@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::env_file;
+use super::paths;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,8 +38,8 @@ impl ImageFamily {
 
     pub fn docker_image(self) -> &'static str {
         match self {
-            ImageFamily::Windows => "dockurr/windows",
-            ImageFamily::LinuxDistro | ImageFamily::LinuxIso => "qemux/qemu",
+            ImageFamily::Windows => paths::IMAGE_WINDOWS,
+            ImageFamily::LinuxDistro | ImageFamily::LinuxIso => paths::IMAGE_QEMU,
         }
     }
 }

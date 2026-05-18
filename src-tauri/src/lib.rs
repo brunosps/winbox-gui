@@ -298,7 +298,11 @@ fn open_web_vnc_window(app: &AppHandle, profile_name: &str, port: u16) -> anyhow
         let _ = existing.set_focus();
         return Ok(());
     }
-    let url = format!("http://{}:{}/", paths::HOST, port);
+    let url = format!(
+        "http://{}:{}/?autoconnect=true&resize=scale",
+        paths::HOST,
+        port
+    );
     let parsed = url
         .parse::<tauri::Url>()
         .map_err(|e| anyhow::anyhow!("URL inválida {url}: {e}"))?;

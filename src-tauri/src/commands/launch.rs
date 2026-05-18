@@ -40,7 +40,16 @@ pub fn ensure_running(profile: &str) -> Result<()> {
             Ok(())
         }
         "running" => Ok(()),
+        "absent" => {
+            gpu_hooks::prepare_for_start(profile)?;
+            docker::compose_run(profile, &["up", "-d"])?;
+            wait_for_ready(profile, &container)
+        }
         _ => {
+            // exited/created/dead/restarting: the compose template hardcodes
+            // container_name, so any stale container collides with `compose up`.
+            // Force-remove before recreating.
+            docker::rm_force(&container)?;
             gpu_hooks::prepare_for_start(profile)?;
             docker::compose_run(profile, &["up", "-d"])?;
             wait_for_ready(profile, &container)
@@ -94,7 +103,12 @@ pub fn start(profile: &str) -> Result<()> {
     match status.as_str() {
         "running" => Ok(()),
         "paused" => docker::unpause(&container),
+        "absent" => {
+            gpu_hooks::prepare_for_start(profile)?;
+            docker::compose_run(profile, &["up", "-d"])
+        }
         _ => {
+            docker::rm_force(&container)?;
             gpu_hooks::prepare_for_start(profile)?;
             docker::compose_run(profile, &["up", "-d"])
         }

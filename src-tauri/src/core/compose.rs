@@ -76,7 +76,7 @@ fn render_windows(arguments: &str, devs: &str, caps: &str, extra: &str, ulimits:
     format!(
         "services:\n  \
          winbox:\n    \
-         image: dockurr/windows\n    \
+         image: {image}\n    \
          container_name: ${{CONTAINER_NAME}}\n    \
          environment:\n      \
          VERSION: ${{VERSION}}\n      \
@@ -107,6 +107,7 @@ fn render_windows(arguments: &str, devs: &str, caps: &str, extra: &str, ulimits:
          cpus: \"${{CPU_LIMIT}}\"\n    \
          restart: unless-stopped\n    \
          stop_grace_period: 2m\n",
+        image = paths::IMAGE_WINDOWS,
         args = arguments,
         devs = devs,
         caps = caps,
@@ -125,7 +126,7 @@ fn render_linux_distro(
     format!(
         "services:\n  \
          winbox:\n    \
-         image: qemux/qemu\n    \
+         image: {image}\n    \
          container_name: ${{CONTAINER_NAME}}\n    \
          environment:\n      \
          BOOT: ${{BOOT}}\n      \
@@ -151,6 +152,7 @@ fn render_linux_distro(
          cpus: \"${{CPU_LIMIT}}\"\n    \
          restart: unless-stopped\n    \
          stop_grace_period: 2m\n",
+        image = paths::IMAGE_QEMU,
         args = arguments,
         devs = devs,
         caps = caps,
@@ -170,7 +172,7 @@ fn render_linux_iso(
     format!(
         "services:\n  \
          winbox:\n    \
-         image: qemux/qemu\n    \
+         image: {image}\n    \
          container_name: ${{CONTAINER_NAME}}\n    \
          environment:\n      \
          BOOT: \"/boot.iso\"\n      \
@@ -197,6 +199,7 @@ fn render_linux_iso(
          cpus: \"${{CPU_LIMIT}}\"\n    \
          restart: unless-stopped\n    \
          stop_grace_period: 2m\n",
+        image = paths::IMAGE_QEMU,
         args = arguments,
         devs = devs,
         caps = caps,
@@ -301,6 +304,35 @@ mod tests {
             "GPU profiles must lift memlock rlimit; got {ulimits:?}"
         );
         assert!(args.contains("vfio-pci,host=0000:01:00.0"));
+    }
+
+    #[test]
+    fn render_functions_pin_image_tags() {
+        let win = render_windows("a", "", "", "", "");
+        assert!(
+            win.contains(paths::IMAGE_WINDOWS) && win.contains(':'),
+            "Windows compose must use pinned image; got line with `image:`: {:?}",
+            win.lines().find(|l| l.contains("image:"))
+        );
+        let linux = render_linux_distro("a", "", "", "", "");
+        assert!(
+            linux.contains(paths::IMAGE_QEMU),
+            "Linux distro compose must use pinned qemu image"
+        );
+        let iso = render_linux_iso("a", "", "", "", "", "/tmp/x.iso");
+        assert!(
+            iso.contains(paths::IMAGE_QEMU),
+            "Linux ISO compose must use pinned qemu image"
+        );
+        // Defensive: regression — never emit an unpinned `image: dockurr/windows\n`
+        // (the bare repo with no tag implies `:latest`, breaking reproducibility).
+        for sample in [&win, &linux, &iso] {
+            assert!(
+                !sample.contains("image: dockurr/windows\n")
+                    && !sample.contains("image: qemux/qemu\n"),
+                "compose template regressed to unpinned image"
+            );
+        }
     }
 
     #[test]
