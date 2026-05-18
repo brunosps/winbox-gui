@@ -37,12 +37,28 @@ pub(crate) const WINDOWS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub(crate) const LINUX_POLL_ITERS: u32 = 60;
 pub(crate) const LINUX_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Ensure the VM container is running and wait for it to be reachable.
-/// Generic over [`DockerClient`] so tests can drive it with a mock.
-pub fn ensure_running<D: DockerClient>(
+/// Outcome of the `ensure_started` phase — tells the caller whether the
+/// container was already up or had to be (re)created, so it can decide
+/// whether to skip the long wait_for_* probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerTransition {
+    /// Container was already running, nothing to do.
+    AlreadyRunning,
+    /// Container was paused and got unpaused.
+    Unpaused,
+    /// Container was absent or stale and got created/recreated.
+    Recreated,
+}
+
+/// First half of the launch path: make the container exist and be running.
+/// Returns *immediately* after `docker compose up -d` issues — does NOT wait
+/// for the guest OS to be reachable. Caller is responsible for invoking
+/// [`wait_for_windows`] or [`wait_for_web_port`] (and [`wait_for_rdp_handshake`]
+/// for Windows guests) between progress events.
+pub fn ensure_started<D: DockerClient>(
     profile: &str,
     docker: &D,
-) -> std::result::Result<(), LaunchError> {
+) -> std::result::Result<ContainerTransition, LaunchError> {
     let container = paths::profile_container(profile);
     let status = docker.container_status(&container);
     match status.as_str() {
@@ -50,15 +66,15 @@ pub fn ensure_running<D: DockerClient>(
             docker.unpause(&container).map_err(|e| LaunchError::Other {
                 message: format!("{e:#}"),
             })?;
-            Ok(())
+            Ok(ContainerTransition::Unpaused)
         }
-        "running" => Ok(()),
+        "running" => Ok(ContainerTransition::AlreadyRunning),
         "absent" => {
             gpu_hooks::prepare_for_start(profile).map_err(|e| LaunchError::Other {
                 message: format!("{e:#}"),
             })?;
             docker.compose_run(profile, &["up", "-d"])?;
-            wait_for_ready(profile, &container, docker)
+            Ok(ContainerTransition::Recreated)
         }
         _ => {
             // exited/created/dead/restarting — the compose template hardcodes
@@ -72,9 +88,26 @@ pub fn ensure_running<D: DockerClient>(
                 message: format!("{e:#}"),
             })?;
             docker.compose_run(profile, &["up", "-d"])?;
-            wait_for_ready(profile, &container, docker)
+            Ok(ContainerTransition::Recreated)
         }
     }
+}
+
+/// Convenience: start the container and wait for it to be reachable. Kept
+/// for callers that don't need intermediate progress emissions (CLI shim,
+/// tests).
+pub fn ensure_running<D: DockerClient>(
+    profile: &str,
+    docker: &D,
+) -> std::result::Result<(), LaunchError> {
+    let transition = ensure_started(profile, docker)?;
+    if transition == ContainerTransition::AlreadyRunning
+        || transition == ContainerTransition::Unpaused
+    {
+        return Ok(());
+    }
+    let container = paths::profile_container(profile);
+    wait_for_ready(profile, &container, docker)
 }
 
 fn wait_for_ready<D: DockerClient>(

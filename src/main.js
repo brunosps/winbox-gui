@@ -112,11 +112,53 @@ let healthLoadedAt = 0;
 const HEALTH_TTL_MS = 30000;
 const operationEvents = [];
 
+// Active launch operations indexed by profile name. Updated as
+// operation-progress events arrive so the card can show the current
+// step (e.g. "Aguardando Windows iniciar...") instead of a silent
+// disabled button during the multi-minute boot wait.
+const activeOps = new Map();
+
 if (tauriEvent && tauriEvent.listen) {
   tauriEvent.listen("operation-progress", (ev) => {
-    addOperationEvent(ev.payload || {});
+    const payload = ev.payload || {};
+    addOperationEvent(payload);
     renderOperationPanel();
+    const status = String(payload.status || "");
+    const profile = String(payload.profile || "");
+    if (!profile) return;
+    if (status === "running") {
+      activeOps.set(profile, {
+        op: String(payload.op || ""),
+        step: String(payload.step || ""),
+        message: String(payload.message || ""),
+      });
+    } else {
+      // complete | success | failed | error → clear inline status.
+      activeOps.delete(profile);
+    }
+    renderProfileCardInline(profile);
   });
+}
+
+// Update only the running-state region of a single card without
+// re-rendering the whole list (which would steal focus from any open
+// menu / input).
+function renderProfileCardInline(profileName) {
+  const card = document.querySelector(`.profile-detail[data-profile="${CSS.escape(profileName)}"]`);
+  if (!card) return;
+  const slot = card.querySelector(".card-progress");
+  if (!slot) return;
+  const op = activeOps.get(profileName);
+  if (!op) {
+    slot.innerHTML = "";
+    slot.removeAttribute("data-running");
+    return;
+  }
+  slot.setAttribute("data-running", "true");
+  slot.innerHTML = `
+    <span class="card-progress-spinner" aria-hidden="true"></span>
+    <span class="card-progress-msg">${escapeHtml(op.message || op.step || "Processando...")}</span>
+  `;
 }
 
 function profileName(p) {
@@ -490,6 +532,7 @@ function profileDetailTemplate(p) {
         <span class="badge-os ${os.className}">${escapeHtml(os.label)}</span>
         <span class="badge-connect ${mode.className}">${escapeHtml(mode.label)}</span>
       </div>
+      <div class="card-progress" aria-live="polite"></div>
       <dl class="detail-grid">
         <div><dt>${t("card.spec.ram")}</dt><dd>${escapeHtml(p.ram || "—")}</dd></div>
         <div><dt>${t("dashboard.detail.web")}</dt><dd>:${escapeHtml(p.web_port || "—")}</dd></div>

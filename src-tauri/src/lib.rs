@@ -275,14 +275,85 @@ async fn launch_profile(
         "running",
         "Preparando conexão do perfil.",
     );
+    let progress_app = app.clone();
+    let progress_profile = profile_name.clone();
+    let emit = move |step: &str, message: &str| {
+        emit_progress(
+            &progress_app,
+            &progress_profile,
+            "launch",
+            step,
+            "running",
+            message,
+        );
+    };
     let join =
         tauri::async_runtime::spawn_blocking(move || -> Result<OperationResult, LaunchError> {
-            let docker = CliDocker;
+            use crate::core::docker;
+            use commands::launch as cmd_launch;
+            let docker_cli = CliDocker;
+            emit("preflight", "Verificando KVM, Docker e cliente RDP...");
             match mode {
-                ConnectMode::Rdp => commands::launch::launch_rdp(&profile_name, &docker)?,
+                ConnectMode::Rdp => {
+                    docker::preflight_kvm()?;
+                    docker::preflight_docker_installed()?;
+                    docker::preflight_docker_daemon()?;
+                    docker::preflight_freerdp()?;
+                }
                 ConnectMode::WebVnc => {
-                    let port = commands::launch::ensure_for_web_vnc(&profile_name, &docker)?;
-                    open_web_vnc_window(&app_clone, &profile_name, port).map_err(|e| {
+                    docker::preflight_kvm()?;
+                    docker::preflight_docker_installed()?;
+                    docker::preflight_docker_daemon()?;
+                }
+            }
+
+            emit("starting", "Subindo container Docker...");
+            let transition = cmd_launch::ensure_started(&profile_name, &docker_cli)?;
+            let needs_wait = matches!(transition, cmd_launch::ContainerTransition::Recreated);
+
+            match mode {
+                ConnectMode::Rdp => {
+                    if needs_wait {
+                        emit(
+                            "wait_windows",
+                            "Aguardando Windows iniciar (pode levar 1-4min na primeira vez)...",
+                        );
+                        let container = paths::profile_container(&profile_name);
+                        cmd_launch::wait_for_windows(&profile_name, &container, &docker_cli)?;
+                    }
+                    let env = crate::core::env_file::read(&paths::profile_env_file(&profile_name))
+                        .map_err(|e| LaunchError::Other {
+                            message: format!("falha lendo env: {e:#}"),
+                        })?;
+                    let rdp_port = crate::core::env_file::get_u16(&env, "RDP_PORT");
+                    emit(
+                        "wait_rdp",
+                        "Aguardando o serviço RDP responder dentro do Windows...",
+                    );
+                    cmd_launch::wait_for_rdp_handshake(&profile_name, rdp_port)?;
+                    emit("launching", "Abrindo cliente RDP...");
+                    crate::core::rdp::launch(&profile_name).map_err(|e| LaunchError::Other {
+                        message: format!("{e:#}"),
+                    })?;
+                }
+                ConnectMode::WebVnc => {
+                    if needs_wait {
+                        let env =
+                            crate::core::env_file::read(&paths::profile_env_file(&profile_name))
+                                .map_err(|e| LaunchError::Other {
+                                    message: format!("falha lendo env: {e:#}"),
+                                })?;
+                        let web_port = crate::core::env_file::get_u16(&env, "WEB_PORT");
+                        emit("wait_vnc", "Aguardando QEMU + noVNC responder...");
+                        cmd_launch::wait_for_web_port(&profile_name, web_port)?;
+                    }
+                    let env = crate::core::env_file::read(&paths::profile_env_file(&profile_name))
+                        .map_err(|e| LaunchError::Other {
+                            message: format!("falha lendo env: {e:#}"),
+                        })?;
+                    let web_port = crate::core::env_file::get_u16(&env, "WEB_PORT");
+                    emit("launching", "Abrindo cliente noVNC no navegador...");
+                    open_web_vnc_window(&app_clone, &profile_name, web_port).map_err(|e| {
                         LaunchError::Other {
                             message: format!("{e:#}"),
                         }
