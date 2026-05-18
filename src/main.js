@@ -3,6 +3,11 @@ const tauriEvent = window.__TAURI__.event;
 
 import { t, applyAll as applyI18n, getLocale, setLocale } from "./i18n.js";
 import { cssToken, escapeAttr, escapeHtml } from "./dom-utils.js";
+import {
+  modeMeta,
+  primaryActionMeta as primaryActionMetaImpl,
+  profileState,
+} from "./profile-display.js";
 import "./locales/en-US.js";
 import "./locales/pt-BR.js";
 
@@ -102,10 +107,6 @@ function profileName(p) {
   return String(p.name || "");
 }
 
-function profileState(p) {
-  return String(p.status || "absent");
-}
-
 function bundlesForProfile(p) {
   if (!p.bundles || p.bundles === "essentials") return ["essentials"];
   const list = String(p.bundles).split(",").map(b => b.trim()).filter(Boolean);
@@ -119,16 +120,8 @@ function osMeta(p) {
   return { label: p.boot || "Linux", className: "is-linux" };
 }
 
-function modeMeta(p) {
-  const mode = p.connect_mode || "rdp";
-  return { label: mode === "rdp" ? "RDP" : "VNC", className: `is-${cssToken(mode)}` };
-}
-
 function primaryActionMeta(p) {
-  const state = profileState(p);
-  if (state === "running") return { act: "launch", label: t("card.connect"), icon: ICO.play };
-  if (state === "paused") return { act: "resume", label: t("card.resume"), icon: ICO.play };
-  return { act: "launch", label: t("card.launch"), icon: ICO.play };
+  return primaryActionMetaImpl(p, { t, icons: ICO });
 }
 
 function matchesProfile(p) {
