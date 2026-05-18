@@ -110,6 +110,17 @@ registerLocale("en-US", {
   "toast.profileCreated": "Profile created",
   "toast.profileError": "Error in '{profile}' ({op}): {msg}",
 
+  "launch.error.kvm_denied": "KVM is not available. Run: sudo usermod -aG kvm $USER && reboot",
+  "launch.error.docker_missing": "Docker is not installed or not on PATH. Install the docker-ce package.",
+  "launch.error.docker_daemon_down": "Docker daemon is not responding. Run: sudo systemctl start docker",
+  "launch.error.freerdp_missing": "xfreerdp3 is not installed. On Ubuntu/Debian: sudo apt install freerdp3-x11",
+  "launch.error.port_conflict": "Port {port} is already in use on the host. Free the owning process or change the profile's port settings.",
+  "launch.error.image_pull_failed": "Failed to pull image '{image}'. Check your network connection and retry.",
+  "launch.error.container_crash": "Container '{container}' crashed during boot. Check the profile logs.",
+  "launch.error.timeout_windows": "Windows '{profile}' did not finish booting in time. The first run downloads the ISO — open the profile logs to track progress.",
+  "launch.error.timeout_linux": "Linux profile '{profile}' did not respond on 127.0.0.1:{port}. Open the profile logs to investigate.",
+  "launch.error.other": "Failed to launch profile: {message}",
+
   // Install modal
   "install.title": "New profile",
   "install.subtitle": "configure the VM",

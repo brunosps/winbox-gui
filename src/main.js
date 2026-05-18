@@ -60,6 +60,22 @@ function showErrorToast(err) {
   showToast(t("toast.genericError", { msg: formatErrorForToast(err) }), "error");
 }
 
+// Render a structured LaunchError ({code, ...fields}) emitted by the
+// Tauri launch_profile command. Falls back to showErrorToast for
+// string errors or unknown shapes.
+function renderLaunchError(err) {
+  if (!err || typeof err !== "object" || typeof err.code !== "string") {
+    return showErrorToast(err);
+  }
+  const key = `launch.error.${err.code}`;
+  const message = t(key, err);
+  // t() returns the key verbatim when missing — fall back to generic in that case.
+  if (message === key) {
+    return showErrorToast(err.message || err.code);
+  }
+  showToast(message, "error");
+}
+
 // Background errors raised by launch/install/update/restart land here.
 if (tauriEvent && tauriEvent.listen) {
   tauriEvent.listen("profile-error", (ev) => {
@@ -864,7 +880,11 @@ document.addEventListener("click", async (ev) => {
     showToast((typeof res === "string" ? res : res?.message) || `${act} em '${name}' ✓`, "success");
     setTimeout(render, 600);
   } catch (e) {
-    showErrorToast(e);
+    if (act === "launch") {
+      renderLaunchError(e);
+    } else {
+      showErrorToast(e);
+    }
   } finally {
     btn.disabled = false;
   }
