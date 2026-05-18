@@ -38,20 +38,24 @@ pub(crate) const LINUX_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Ensure the VM container is running and wait for it to be reachable.
 /// Generic over [`DockerClient`] so tests can drive it with a mock.
-pub fn ensure_running<D: DockerClient>(profile: &str, docker: &D) -> std::result::Result<(), LaunchError> {
+pub fn ensure_running<D: DockerClient>(
+    profile: &str,
+    docker: &D,
+) -> std::result::Result<(), LaunchError> {
     let container = paths::profile_container(profile);
     let status = docker.container_status(&container);
     match status.as_str() {
         "paused" => {
-            docker
-                .unpause(&container)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
+            docker.unpause(&container).map_err(|e| LaunchError::Other {
+                message: format!("{e:#}"),
+            })?;
             Ok(())
         }
         "running" => Ok(()),
         "absent" => {
-            gpu_hooks::prepare_for_start(profile)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
+            gpu_hooks::prepare_for_start(profile).map_err(|e| LaunchError::Other {
+                message: format!("{e:#}"),
+            })?;
             docker.compose_run(profile, &["up", "-d"])?;
             wait_for_ready(profile, &container, docker)
         }
@@ -60,9 +64,12 @@ pub fn ensure_running<D: DockerClient>(profile: &str, docker: &D) -> std::result
             // container_name, so any stale container collides with `compose up`.
             docker
                 .rm_force(&container)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
-            gpu_hooks::prepare_for_start(profile)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
+                .map_err(|e| LaunchError::Other {
+                    message: format!("{e:#}"),
+                })?;
+            gpu_hooks::prepare_for_start(profile).map_err(|e| LaunchError::Other {
+                message: format!("{e:#}"),
+            })?;
             docker.compose_run(profile, &["up", "-d"])?;
             wait_for_ready(profile, &container, docker)
         }
@@ -104,20 +111,18 @@ pub(crate) fn wait_for_windows<D: DockerClient>(
     })
 }
 
-pub(crate) fn wait_for_web_port(
-    profile: &str,
-    port: u16,
-) -> std::result::Result<(), LaunchError> {
+pub(crate) fn wait_for_web_port(profile: &str, port: u16) -> std::result::Result<(), LaunchError> {
     if port == 0 {
         return Err(LaunchError::Other {
             message: format!("WEB_PORT não definido para '{profile}'"),
         });
     }
-    let addr: SocketAddr = format!("{}:{}", paths::HOST, port)
-        .parse()
-        .map_err(|e| LaunchError::Other {
-            message: format!("endereço inválido {}:{} — {e}", paths::HOST, port),
-        })?;
+    let addr: SocketAddr =
+        format!("{}:{}", paths::HOST, port)
+            .parse()
+            .map_err(|e| LaunchError::Other {
+                message: format!("endereço inválido {}:{} — {e}", paths::HOST, port),
+            })?;
     for _ in 0..LINUX_POLL_ITERS {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
             return Ok(());
@@ -137,33 +142,42 @@ pub fn start<D: DockerClient>(profile: &str, docker: &D) -> std::result::Result<
     let status = docker.container_status(&container);
     match status.as_str() {
         "running" => Ok(()),
-        "paused" => docker
-            .unpause(&container)
-            .map_err(|e| LaunchError::Other { message: format!("{e:#}") }),
+        "paused" => docker.unpause(&container).map_err(|e| LaunchError::Other {
+            message: format!("{e:#}"),
+        }),
         "absent" => {
-            gpu_hooks::prepare_for_start(profile)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
+            gpu_hooks::prepare_for_start(profile).map_err(|e| LaunchError::Other {
+                message: format!("{e:#}"),
+            })?;
             docker.compose_run(profile, &["up", "-d"])
         }
         _ => {
             docker
                 .rm_force(&container)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
-            gpu_hooks::prepare_for_start(profile)
-                .map_err(|e| LaunchError::Other { message: format!("{e:#}") })?;
+                .map_err(|e| LaunchError::Other {
+                    message: format!("{e:#}"),
+                })?;
+            gpu_hooks::prepare_for_start(profile).map_err(|e| LaunchError::Other {
+                message: format!("{e:#}"),
+            })?;
             docker.compose_run(profile, &["up", "-d"])
         }
     }
 }
 
 /// Windows path: ensure running + spawn xfreerdp.
-pub fn launch_rdp<D: DockerClient>(profile: &str, docker: &D) -> std::result::Result<(), LaunchError> {
+pub fn launch_rdp<D: DockerClient>(
+    profile: &str,
+    docker: &D,
+) -> std::result::Result<(), LaunchError> {
     docker::preflight_kvm()?;
     docker::preflight_docker_installed()?;
     docker::preflight_docker_daemon()?;
     docker::preflight_freerdp()?;
     ensure_running(profile, docker)?;
-    rdp::launch(profile).map_err(|e| LaunchError::Other { message: format!("{e:#}") })
+    rdp::launch(profile).map_err(|e| LaunchError::Other {
+        message: format!("{e:#}"),
+    })
 }
 
 /// Linux path: ensure running + return WEB_PORT.
@@ -175,11 +189,10 @@ pub fn ensure_for_web_vnc<D: DockerClient>(
     docker::preflight_docker_installed()?;
     docker::preflight_docker_daemon()?;
     ensure_running(profile, docker)?;
-    let map = env_file::read(&paths::profile_env_file(profile)).map_err(|e| {
-        LaunchError::Other {
+    let map =
+        env_file::read(&paths::profile_env_file(profile)).map_err(|e| LaunchError::Other {
             message: format!("falha lendo env: {e:#}"),
-        }
-    })?;
+        })?;
     Ok(env_file::get_u16(&map, "WEB_PORT"))
 }
 
@@ -231,10 +244,7 @@ mod tests {
         docker.seed_status(&c, "paused");
         ensure_running(profile, &docker).unwrap();
         let calls = docker.calls();
-        assert_eq!(
-            calls,
-            vec![format!("status:{c}"), format!("unpause:{c}")]
-        );
+        assert_eq!(calls, vec![format!("status:{c}"), format!("unpause:{c}")]);
     }
 
     #[test]
@@ -275,7 +285,10 @@ mod tests {
             !calls.iter().any(|c| c.starts_with("rm_force:")),
             "absent path must not rm; got calls = {calls:?}"
         );
-        assert!(calls.last().unwrap().starts_with(&format!("compose:{profile}:up")));
+        assert!(calls
+            .last()
+            .unwrap()
+            .starts_with(&format!("compose:{profile}:up")));
     }
 
     #[test]

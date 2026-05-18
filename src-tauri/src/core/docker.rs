@@ -16,7 +16,11 @@ use super::paths;
 /// from leaking launch-specific semantics into housekeeping calls.
 pub trait DockerClient {
     fn container_status(&self, name: &str) -> String;
-    fn compose_run(&self, profile: &str, action_args: &[&str]) -> std::result::Result<(), LaunchError>;
+    fn compose_run(
+        &self,
+        profile: &str,
+        action_args: &[&str],
+    ) -> std::result::Result<(), LaunchError>;
     fn logs(&self, container: &str, extra: &[&str]) -> Result<String>;
     fn logs_contains(&self, container: &str, needle: &str) -> bool;
     fn pause(&self, container: &str) -> Result<()>;
@@ -57,7 +61,11 @@ impl DockerClient for CliDocker {
         }
     }
 
-    fn compose_run(&self, profile: &str, action_args: &[&str]) -> std::result::Result<(), LaunchError> {
+    fn compose_run(
+        &self,
+        profile: &str,
+        action_args: &[&str],
+    ) -> std::result::Result<(), LaunchError> {
         let cfg_dir = paths::profile_cfg_dir(profile);
         let env_file = paths::profile_env_file(profile);
         let compose_file = paths::profile_compose_file(profile);

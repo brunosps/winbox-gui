@@ -275,26 +275,27 @@ async fn launch_profile(
         "running",
         "Preparando conexão do perfil.",
     );
-    let join = tauri::async_runtime::spawn_blocking(move || -> Result<OperationResult, LaunchError> {
-        let docker = CliDocker;
-        match mode {
-            ConnectMode::Rdp => commands::launch::launch_rdp(&profile_name, &docker)?,
-            ConnectMode::WebVnc => {
-                let port = commands::launch::ensure_for_web_vnc(&profile_name, &docker)?;
-                open_web_vnc_window(&app_clone, &profile_name, port).map_err(|e| {
-                    LaunchError::Other {
-                        message: format!("{e:#}"),
-                    }
-                })?;
+    let join =
+        tauri::async_runtime::spawn_blocking(move || -> Result<OperationResult, LaunchError> {
+            let docker = CliDocker;
+            match mode {
+                ConnectMode::Rdp => commands::launch::launch_rdp(&profile_name, &docker)?,
+                ConnectMode::WebVnc => {
+                    let port = commands::launch::ensure_for_web_vnc(&profile_name, &docker)?;
+                    open_web_vnc_window(&app_clone, &profile_name, port).map_err(|e| {
+                        LaunchError::Other {
+                            message: format!("{e:#}"),
+                        }
+                    })?;
+                }
             }
-        }
-        Ok(OperationResult {
-            profile: profile_name,
-            op: "launch".into(),
-            message: "Perfil iniciado.".into(),
+            Ok(OperationResult {
+                profile: profile_name,
+                op: "launch".into(),
+                message: "Perfil iniciado.".into(),
+            })
         })
-    })
-    .await;
+        .await;
     let result = match join {
         Ok(inner) => inner,
         Err(e) => Err(LaunchError::Other {
@@ -319,7 +320,7 @@ async fn launch_profile(
                 "launch",
                 "failed",
                 "error",
-                &err.to_string(),
+                err.to_string(),
             );
         }
     }

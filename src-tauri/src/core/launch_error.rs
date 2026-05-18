@@ -22,10 +22,7 @@ pub enum LaunchError {
     /// `docker pull` failed (network, manifest, or auth).
     ImagePullFailed { image: String, stderr: String },
     /// Container started but exited before becoming ready.
-    ContainerCrash {
-        container: String,
-        log_tail: String,
-    },
+    ContainerCrash { container: String, log_tail: String },
     /// Windows guest never logged the "started successfully" marker
     /// within the configured polling window.
     TimeoutWindows { profile: String },
@@ -132,12 +129,7 @@ mod tests {
                 },
                 "timeout_linux",
             ),
-            (
-                LaunchError::Other {
-                    message: "".into(),
-                },
-                "other",
-            ),
+            (LaunchError::Other { message: "".into() }, "other"),
         ];
         for (err, code) in cases {
             assert_eq!(
