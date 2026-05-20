@@ -20,15 +20,14 @@ pub fn generate(profile: &str, bundles_csv: &str) -> Result<()> {
     std::fs::create_dir_all(&oem).with_context(|| format!("mkdir {}", oem.display()))?;
 
     // authorized_keys: use first SSH pubkey found, else delete.
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    // paths::home() is cross-platform ($HOME on unix, %USERPROFILE% on Windows).
+    let home = paths::home();
     let mut key: Option<String> = None;
-    if let Some(h) = home {
-        for cand in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"] {
-            let p = h.join(".ssh").join(cand);
-            if let Ok(content) = std::fs::read_to_string(&p) {
-                key = Some(content);
-                break;
-            }
+    for cand in ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"] {
+        let p = home.join(".ssh").join(cand);
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            key = Some(content);
+            break;
         }
     }
     let auth_path = oem.join("authorized_keys");

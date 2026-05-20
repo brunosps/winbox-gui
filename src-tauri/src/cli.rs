@@ -578,9 +578,7 @@ fn cmd_install_interactive(a: InstallArgs) -> Result<()> {
     if let Ok(map) = env_file::read(&paths::profile_env_file(&profile_name)) {
         let port = env_file::get_u16(&map, "WEB_PORT");
         if port != 0 {
-            let _ = std::process::Command::new("xdg-open")
-                .arg(format!("http://{}:{}", paths::HOST, port))
-                .spawn();
+            let _ = crate::core::opener::open_url(&format!("http://{}:{}", paths::HOST, port));
         }
     }
     println!("Perfil '{}' criado.", profile_name);

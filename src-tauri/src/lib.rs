@@ -374,10 +374,8 @@ fn open_web_vnc_window(_app: &AppHandle, profile_name: &str, port: u16) -> anyho
         paths::HOST,
         port
     );
-    std::process::Command::new("xdg-open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("falha ao abrir noVNC ({url}): {e}"))?;
+    crate::core::opener::open_url(&url)
+        .map_err(|e| anyhow::anyhow!("falha ao abrir noVNC ({url}): {e:#}"))?;
     Ok(())
 }
 

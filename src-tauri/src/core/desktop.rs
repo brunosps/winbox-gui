@@ -1,8 +1,19 @@
 use anyhow::Result;
+#[cfg(not(windows))]
 use std::process::Command;
 
+#[cfg(not(windows))]
 use super::{paths, profile};
 
+/// Regenerate desktop launchers. On Linux this writes XDG `.desktop`
+/// entries; on Windows it's a no-op for now (Start Menu `.lnk` shortcuts
+/// are created by the installer in Phase 5 — see prd-windows-port).
+#[cfg(windows)]
+pub fn regenerate() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
 fn main_entry_body() -> String {
     "[Desktop Entry]\n\
      Type=Application\n\
@@ -19,6 +30,7 @@ fn main_entry_body() -> String {
         .to_string()
 }
 
+#[cfg(not(windows))]
 fn profile_entry_body(p: &str) -> String {
     format!(
         "[Desktop Entry]\n\
@@ -46,6 +58,7 @@ fn profile_entry_body(p: &str) -> String {
     )
 }
 
+#[cfg(not(windows))]
 pub fn regenerate() -> Result<()> {
     let apps = paths::apps_dir();
     std::fs::create_dir_all(&apps)?;

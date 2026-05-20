@@ -12,36 +12,98 @@ pub const BASE_WEB_PORT: u16 = 8006;
 pub const BASE_RDP_PORT: u16 = 3389;
 pub const BASE_SSH_PORT: u16 = 2222;
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+/// User home dir. Unix: `$HOME`. Windows: `%USERPROFILE%`.
+pub fn home() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
 }
 
+#[cfg(not(windows))]
 fn xdg(var: &str, fallback_rel: &str) -> PathBuf {
     std::env::var_os(var)
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(fallback_rel))
 }
 
+/// `%APPDATA%` (Roaming) on Windows, with a sane fallback.
+#[cfg(windows)]
+fn appdata() -> PathBuf {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join("AppData").join("Roaming"))
+}
+
+/// `%LOCALAPPDATA%` on Windows (for larger/local data + cache).
+#[cfg(windows)]
+fn local_appdata() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join("AppData").join("Local"))
+}
+
 pub fn config_dir() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("winbox")
+    #[cfg(windows)]
+    {
+        appdata().join("winbox")
+    }
+    #[cfg(not(windows))]
+    {
+        xdg("XDG_CONFIG_HOME", ".config").join("winbox")
+    }
 }
 
 pub fn data_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("winbox")
+    #[cfg(windows)]
+    {
+        local_appdata().join("winbox")
+    }
+    #[cfg(not(windows))]
+    {
+        xdg("XDG_DATA_HOME", ".local/share").join("winbox")
+    }
 }
 
 pub fn cache_dir() -> PathBuf {
-    xdg("XDG_CACHE_HOME", ".cache").join("winbox")
+    #[cfg(windows)]
+    {
+        local_appdata().join("winbox").join("cache")
+    }
+    #[cfg(not(windows))]
+    {
+        xdg("XDG_CACHE_HOME", ".cache").join("winbox")
+    }
 }
 
 pub fn profile_rdp_log_file(p: &str) -> PathBuf {
     cache_dir().join(format!("rdp-{p}.log"))
 }
 
+/// Where to drop app shortcuts. Unix: XDG applications dir (`.desktop`).
+/// Windows: the per-user Start Menu Programs folder (`.lnk`).
 pub fn apps_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("applications")
+    #[cfg(windows)]
+    {
+        appdata()
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("winbox")
+    }
+    #[cfg(not(windows))]
+    {
+        xdg("XDG_DATA_HOME", ".local/share").join("applications")
+    }
 }
 
 pub fn default_file() -> PathBuf {

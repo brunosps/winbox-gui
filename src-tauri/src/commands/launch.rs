@@ -221,9 +221,7 @@ pub fn ensure_for_web_vnc<D: DockerClient>(
 pub fn launch(profile: &str, on_close: OnClose) -> Result<()> {
     let docker = CliDocker;
     let port = ensure_for_web_vnc(profile, &docker).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let _ = std::process::Command::new("xdg-open")
-        .arg(format!("http://{}:{}", paths::HOST, port))
-        .spawn();
+    let _ = crate::core::opener::open_url(&format!("http://{}:{}", paths::HOST, port));
     let _ = on_close;
     Ok(())
 }
