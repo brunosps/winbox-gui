@@ -2,9 +2,15 @@
 
 GUI e CLI em Tauri 2 para gerenciar VMs Windows/Linux via Docker/QEMU.
 
-O app lista perfis, mostra status ao vivo, cria perfis, abre RDP ou web-VNC,
-altera recursos, aplica bundles, gerencia GPU VFIO, expõe snapshots e faz
-diagnóstico operacional do host antes de ações críticas.
+O app lista perfis, mostra status ao vivo, cria perfis, abre o viewer
+noVNC no navegador, altera recursos, aplica bundles, gerencia GPU VFIO,
+expõe snapshots e faz diagnóstico operacional do host antes de ações
+críticas.
+
+> **Conexão via browser**: tanto perfis Windows quanto Linux são
+> acessados pelo viewer noVNC servido pelo dockurr/qemux na `WEB_PORT`
+> (aberto no navegador padrão). Não há mais dependência de clientes RDP
+> standalone (`xfreerdp3`/`mstsc`) no host.
 
 ## Stack
 
@@ -59,20 +65,32 @@ Artefatos ficam em `src-tauri/target/release/bundle/` quando bundling estiver at
 
 ## Problemas comuns?
 
-Veja [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — cobre os 4 sintomas
-mais frequentes (FreeRDP ausente, tela preta no VNC por GPU
+Veja [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — cobre os sintomas mais
+frequentes (storage em drvfs lento, RAM ajustada automaticamente pelo
+dockurr, container travado/zombie, tela preta no VNC por GPU
 passthrough, conflito de container name, timeout do primeiro boot do
 Windows). Para detalhes internos, veja [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
 ## Funcionalidades
 
-- Perfis Windows com RDP e bundles PowerShell.
-- Perfis Linux por distro/ISO com web-VNC.
+- Perfis Windows com bundles PowerShell, acessados pelo browser (noVNC).
+- Perfis Linux por distro/ISO, também via browser (noVNC).
+- Criação de perfil pelo menu **"Novo perfil"** (Windows / Linux distro /
+  ISO personalizada), com o modal focado só no tipo escolhido.
+- **Local de armazenamento configurável** por perfil — escolha onde o
+  disco da VM vive. Caminhos em `/mnt/<letra>/` (drvfs do Windows) são
+  **rejeitados** por serem lentos demais (~104 MB/s vs. ~3 GB/s no ext4
+  da distro); use um caminho dentro do WSL (ex.: `~/winbox-disks/...`),
+  que grava no mesmo disco físico mas via I/O nativo.
 - Configuração de RAM, CPU, disco, portas extras e GPU.
 - Snapshots e rollback do storage.
 - Reapply de bundles copiando `winbox-reapply.ps1` para a pasta compartilhada.
-- GPU passthrough via VFIO com configuração persistente de host.
+- GPU passthrough via VFIO com configuração persistente de host (Linux).
 - Host Health com Docker, Compose, KVM, storage, portas, perfis e GPU/VFIO.
+  Erros de launch são classificados em variantes específicas
+  (`wsl_distro_down`, `container_oom_killed`, `disk_full`,
+  `storage_path_invalid`, etc.) com dica acionável.
+- Progresso de `docker pull` em tempo real (camadas + bytes).
 - Timeline de operações longas via eventos Tauri `operation-progress`.
 
 ## Segurança Operacional

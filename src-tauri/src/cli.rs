@@ -385,7 +385,10 @@ fn dispatch(cmd: Cmd) -> Result<()> {
                     return Ok(());
                 }
             }
-            lifecycle::remove(&profile)
+            // CLI default: also delete the custom storage path (matches the
+            // GUI default with the checkbox pre-checked). Future flag could
+            // expose --keep-storage if needed.
+            lifecycle::remove(&profile, true)
         }
         Cmd::Bundles(BundlesCmd::List) => {
             for b in bundles::list() {
@@ -568,6 +571,7 @@ fn cmd_install_interactive(a: InstallArgs) -> Result<()> {
         image_family: None,
         boot: None,
         iso_path: None,
+        storage_path: None,
     };
     cmd_install::run(params)?;
     // Open web viewer

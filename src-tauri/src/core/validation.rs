@@ -1,6 +1,7 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PortForward {
@@ -100,6 +101,115 @@ fn parse_gib(value: &str, label: &str, min: u32, max: u32) -> Result<u32> {
         bail!("{label} inválido '{value}' — use um valor entre {min}G e {max}G.");
     }
     Ok(n)
+}
+
+/// Outcome of a successful [`validate_storage_path`] call. Carries
+/// non-fatal warnings the UI may want to surface (e.g. WSL drvfs path).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StoragePathCheck {
+    /// Soft advisory the UI should show as a yellow note. `None` means
+    /// the path is unremarkable.
+    pub warning: Option<String>,
+}
+
+/// Validate a user-supplied custom storage directory for a VM profile.
+///
+/// Rules:
+///
+/// * Empty input → `Ok(None)` (caller falls back to the default path).
+/// * Absolute path required; relative paths are rejected.
+/// * **Paths under `/mnt/<drive>/` (WSL drvfs) are REJECTED.** drvfs/9p
+///   delivers ~104 MB/s vs. ~3 GB/s on the distro's native ext4, and the
+///   slow I/O makes Windows installs take hours and stall — incompatible
+///   with VM disk images. The user must pick a path inside the distro
+///   (e.g. `~/winbox-disks/...`), which still lands on the same physical
+///   drive (the ext4.vhdx) but via fast native I/O.
+/// * Directory is created if missing (parent must exist + be writable).
+/// * Write permission is probed with a tiny temp file.
+/// * Free space must be at least `disk_size_env` (e.g. `"128G"`).
+pub fn validate_storage_path(
+    value: &str,
+    disk_size_env: &str,
+) -> Result<Option<StoragePathCheck>> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Ok(None);
+    }
+    validate_env_value("Local de armazenamento", v)?;
+    let path = Path::new(v);
+    if !path.is_absolute() {
+        bail!("Local de armazenamento deve usar caminho absoluto: '{v}'");
+    }
+
+    // Hard reject drvfs mounts — they're too slow for VM disk images and
+    // cause installs to stall. Done before any filesystem work so we never
+    // create a directory on an incompatible mount.
+    if is_wsl_drvfs(path) {
+        bail!(
+            "'{v}' está em /mnt/ (drvfs do Windows), que é lento demais para discos de VM \
+             (~104 MB/s vs. ~3 GB/s no disco da distro). Escolha um caminho dentro do WSL, \
+             como /home/bruno/winbox-disks — ele grava no mesmo disco físico, mas rápido."
+        );
+    }
+
+    let need_gib = parse_gib(disk_size_env, "Disco", 1, 8192)?;
+
+    if path.exists() {
+        if !path.is_dir() {
+            bail!("'{v}' existe mas não é diretório.");
+        }
+    } else {
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("Não foi possível criar diretório '{v}'"))?;
+    }
+
+    let probe = path.join(".winbox-write-test");
+    std::fs::write(&probe, b"ok")
+        .with_context(|| format!("Sem permissão de escrita em '{v}'"))?;
+    let _ = std::fs::remove_file(&probe);
+
+    if let Some(free_bytes) = query_free_bytes(path) {
+        let need_bytes: u64 = (need_gib as u64) * 1024 * 1024 * 1024;
+        if free_bytes < need_bytes {
+            let free_gib = free_bytes / (1024 * 1024 * 1024);
+            bail!(
+                "Espaço insuficiente em '{v}': preciso de {need_gib}G, disponível {free_gib}G."
+            );
+        }
+    }
+
+    Ok(Some(StoragePathCheck { warning: None }))
+}
+
+/// Available bytes on the filesystem hosting `path`, via `df`. Returns
+/// `None` if df is missing or the output cannot be parsed — callers
+/// should treat that as "unknown" and skip the space check rather than
+/// fail closed.
+fn query_free_bytes(path: &Path) -> Option<u64> {
+    let out = Command::new("df")
+        .args(["--output=avail", "-B", "1"])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.lines().nth(1)?.trim().parse().ok()
+}
+
+/// Heuristic: paths shaped like `/mnt/<letter>/...` (one ASCII char
+/// after `/mnt/`) are almost always WSL drvfs mounts of Windows drives.
+fn is_wsl_drvfs(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    if !s.starts_with("/mnt/") {
+        return false;
+    }
+    let rest = &s["/mnt/".len()..];
+    let mut chars = rest.chars();
+    let first = chars.next();
+    let second = chars.next();
+    matches!(first, Some(c) if c.is_ascii_alphabetic()) && matches!(second, Some('/') | None)
 }
 
 pub fn validate_iso_path(value: &str) -> Result<()> {
@@ -270,5 +380,52 @@ mod tests {
         assert!(validate_profile_name("../bad").is_err());
         assert!(validate_bdf("0000:01:00.0").is_ok());
         assert!(validate_bdf("0000:01:00").is_err());
+    }
+
+    #[test]
+    fn storage_path_empty_returns_none() {
+        let out = validate_storage_path("", "128G").unwrap();
+        assert!(out.is_none());
+        let out = validate_storage_path("   ", "128G").unwrap();
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn storage_path_rejects_relative() {
+        let err = validate_storage_path("foo/bar", "8G").unwrap_err();
+        assert!(format!("{err}").contains("absoluto"));
+    }
+
+    #[test]
+    fn storage_path_creates_missing_dir() {
+        let tmp = std::env::temp_dir().join(format!(
+            "winbox-test-storage-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let out = validate_storage_path(tmp.to_str().unwrap(), "1G").unwrap();
+        assert!(out.is_some(), "expected Some(check), got {out:?}");
+        assert!(tmp.exists() && tmp.is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn storage_path_drvfs_heuristic() {
+        // Doesn't need to actually exist — we only exercise the heuristic.
+        assert!(is_wsl_drvfs(Path::new("/mnt/c/Users/foo")));
+        assert!(is_wsl_drvfs(Path::new("/mnt/e/disks")));
+        assert!(is_wsl_drvfs(Path::new("/mnt/c"))); // bare letter, no trailing slash
+        assert!(!is_wsl_drvfs(Path::new("/home/bruno/storage")));
+        assert!(!is_wsl_drvfs(Path::new("/mnt/wsl/instances"))); // multi-letter -> not a drive
+    }
+
+    #[test]
+    fn storage_path_rejects_drvfs_mount() {
+        // drvfs paths must be rejected outright (not just warned) — they're
+        // too slow for VM disks. Error fires before any fs work, so a
+        // non-existent /mnt/e path still errors deterministically.
+        let err = validate_storage_path("/mnt/e/winbox", "128G").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("drvfs"), "expected drvfs rejection, got: {msg}");
     }
 }

@@ -45,6 +45,11 @@ pub struct InstallParams {
     /// For LinuxIso: absolute path on host to local .iso/.img/.qcow2 file.
     #[serde(default, rename = "isoPath", alias = "iso_path")]
     pub iso_path: Option<String>,
+    /// Optional override for where the VM disk image lives. When None
+    /// (or empty), falls back to `paths::profile_storage_dir(name)`.
+    /// Must be an absolute, writable path with enough free space.
+    #[serde(default, rename = "storagePath", alias = "storage_path")]
+    pub storage_path: Option<String>,
 }
 
 pub fn run(p: InstallParams) -> Result<()> {
@@ -88,6 +93,20 @@ pub fn run(p: InstallParams) -> Result<()> {
     };
     let mem_limit = format!("{}G", ram.gib + 2);
     let tz = host::tz();
+
+    // Validate the optional custom storage location before touching the
+    // filesystem. Empty / None falls back to the default
+    // `paths::profile_storage_dir(name)` path further down.
+    let storage_override = p
+        .storage_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let _storage_check = match storage_override.as_deref() {
+        Some(path) => validation::validate_storage_path(path, &disk)?,
+        None => None,
+    };
 
     profile::ensure_dirs(&p.name)?;
 
@@ -134,7 +153,9 @@ pub fn run(p: InstallParams) -> Result<()> {
         rdp = rdp_port,
         ssh = ssh_port,
         container = paths::profile_container(&p.name),
-        storage = paths::profile_storage_dir(&p.name).display(),
+        storage = storage_override
+            .clone()
+            .unwrap_or_else(|| paths::profile_storage_dir(&p.name).display().to_string()),
         shared = paths::profile_shared_dir(&p.name).display(),
         oem = paths::profile_oem_dir(&p.name).display(),
         mem = mem_limit,

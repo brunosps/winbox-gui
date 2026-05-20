@@ -10,12 +10,14 @@ export function profileState(p) {
   return String((p && p.status) || "absent");
 }
 
-// Picks the connect-badge label + CSS class for a profile. Linux profiles
-// (`connect_mode: "web_vnc"`) get "VNC"; anything else falls through to RDP.
+// Picks the connect-badge label + CSS class for a profile. All profiles
+// now connect through the browser (noVNC), so the badge is uniformly
+// "Web". The class still varies by family so themes can style Windows
+// vs Linux differently if they want.
 export function modeMeta(p) {
-  const mode = (p && p.connect_mode) || "rdp";
+  const mode = (p && p.connect_mode) || "web_vnc";
   return {
-    label: mode === "rdp" ? "RDP" : "VNC",
+    label: "Web",
     className: `is-${cssToken(mode)}`,
   };
 }

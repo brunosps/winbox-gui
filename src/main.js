@@ -384,13 +384,13 @@ function renderOperationPanel() {
 }
 
 function opsBarTemplate(profiles, health) {
+  // Header dropped on 2026-05-19 per UX request — the "Fleet console"
+  // eyebrow + title + subtitle were repetitive next to the existing
+  // app header and added vertical noise without orientation value.
+  // Health, operations panel and metrics stay; layout falls back from
+  // 4 blocks to 3 cleanly via existing CSS auto-flow.
   return `
     <section class="ops-bar" aria-label="${t("dashboard.overview")}">
-      <div class="ops-intro">
-        <span class="eyebrow">${t("dashboard.eyebrow")}</span>
-        <h2>${t("dashboard.title")}</h2>
-        <p>${t("dashboard.subtitle")}</p>
-      </div>
       ${healthCompactTemplate(health)}
       ${operationPanelTemplate()}
       <div class="ops-metrics" aria-label="${t("dashboard.overview")}">
@@ -682,6 +682,50 @@ function confirmDialog(title, message, yesLabel = "Confirmar") {
       modal.classList.remove("open");
     }
     btn.addEventListener("click", onYes);
+    modal.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", onNo));
+    modal.classList.add("open");
+  });
+}
+
+// Specialised remove dialog with an "also delete disk files" checkbox.
+// Resolves to { confirmed: bool, deleteStorage: bool }. Checkbox starts
+// checked so the default action mirrors what the user expects ("remove"
+// means "remove everything") — they can uncheck to preserve disk files.
+async function removeProfileDialog(name) {
+  // Best-effort lookup of the profile's storage path. If it fails we
+  // still show the dialog but the storage detail line stays generic.
+  let storagePath = "";
+  try {
+    const cfg = await invoke("get_profile_config", { name });
+    storagePath = (cfg && cfg.storage_dir) || "";
+  } catch (_) { /* keep storagePath empty */ }
+
+  return new Promise((resolve) => {
+    const modal = $("#modal-remove-profile");
+    const title = $("#remove-title");
+    const msg = $("#remove-message");
+    const detail = $("#remove-storage-detail");
+    const checkbox = $("#remove-delete-storage");
+    const confirmBtn = $("#remove-confirm");
+
+    title.textContent = t("remove.title", { name }) || `Remove '${name}'?`;
+    msg.textContent = t("remove.msg", { name }) || `Remove profile '${name}'?`;
+    detail.textContent = storagePath
+      ? t("remove.deleteStorage.path", { path: storagePath }) || storagePath
+      : t("remove.deleteStorage.default") || "(default location under app data)";
+    checkbox.checked = true;
+
+    const onYes = () => {
+      cleanup();
+      resolve({ confirmed: true, deleteStorage: checkbox.checked });
+    };
+    const onNo = () => { cleanup(); resolve({ confirmed: false, deleteStorage: false }); };
+    function cleanup() {
+      confirmBtn.removeEventListener("click", onYes);
+      modal.querySelectorAll("[data-close]").forEach(el => el.removeEventListener("click", onNo));
+      modal.classList.remove("open");
+    }
+    confirmBtn.addEventListener("click", onYes);
     modal.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", onNo));
     modal.classList.add("open");
   });
@@ -1170,7 +1214,11 @@ function applyOsFamilyVisibility(form) {
   const family = (form.elements.image_family.value || "windows");
   form.querySelectorAll("[data-os]").forEach(el => {
     const allowed = el.dataset.os.split(/\s+/);
-    el.hidden = !allowed.includes(family);
+    const hide = !allowed.includes(family);
+    // Use class + attribute so even rules that beat [hidden] still hide
+    // the field. .os-hidden carries display:none !important.
+    el.classList.toggle("os-hidden", hide);
+    el.hidden = hide;
   });
   // Required-ness must follow visibility, otherwise hidden fields block submit.
   const versionEl = form.elements.version;
@@ -1185,7 +1233,7 @@ function applyOsFamilyVisibility(form) {
   if (userEl) userEl.required = (family === "windows");
 }
 
-async function openInstall() {
+async function openInstall(preselectFamily = null) {
   try {
     const [host, bundles, gpus, distros] = await Promise.all([
       invoke("host_info"),
@@ -1199,6 +1247,25 @@ async function openInstall() {
     form.reset();
     form.ram.value = Math.max(4, Math.floor(host.ram_gb / 3)) + "G";
     form.cpu.value = Math.max(2, Math.floor(host.cpu_cores / 2));
+
+    // Pre-select OS family when caller specified one — and hide the OS
+    // picker so the modal stays focused on a single VM type. The radios
+    // remain in the DOM so applyOsFamilyVisibility / submit logic keep
+    // working unchanged.
+    const osPickerSection = $("#install-os-picker")?.closest(".section");
+    if (preselectFamily) {
+      const radio = form.querySelector(
+        `input[name="image_family"][value="${preselectFamily}"]`
+      );
+      if (radio) radio.checked = true;
+      if (osPickerSection) {
+        osPickerSection.classList.add("os-hidden");
+        osPickerSection.hidden = true;
+      }
+    } else if (osPickerSection) {
+      osPickerSection.classList.remove("os-hidden");
+      osPickerSection.hidden = false;
+    }
 
     // Distro dropdown
     const bootSel = $("#install-boot");
@@ -1220,6 +1287,46 @@ async function openInstall() {
         } catch (e) {
           showErrorToast(e);
         }
+      });
+    }
+
+    // Storage location picker (optional; empty = default in app data)
+    const storageInput = $("#install-storage");
+    const storagePickBtn = $("#install-storage-pick");
+    const storageClearBtn = $("#install-storage-clear");
+    if (storageInput) storageInput.value = "";
+    if (storageClearBtn) storageClearBtn.hidden = true;
+    if (storagePickBtn && !storagePickBtn.dataset.wired) {
+      storagePickBtn.dataset.wired = "1";
+      storagePickBtn.addEventListener("click", async () => {
+        try {
+          const path = await invoke("pick_storage_dir");
+          if (!path) return;
+          // Reject WSL drvfs mounts (/mnt/<letter>/...) up front — too slow
+          // for VM disks. Backend also enforces this, but failing here gives
+          // immediate feedback instead of failing at profile creation.
+          if (/^\/mnt\/[a-zA-Z](\/|$)/.test(path)) {
+            showToast(
+              t("install.field.storage.drvfsRejected") ||
+                "Esse drive (/mnt/...) é lento demais para discos de VM. Escolha uma pasta dentro do WSL, ex: /home/bruno/winbox-disks",
+              "error",
+            );
+            storageInput.value = "";
+            if (storageClearBtn) storageClearBtn.hidden = true;
+            return;
+          }
+          storageInput.value = path;
+          if (storageClearBtn) storageClearBtn.hidden = false;
+        } catch (e) {
+          showErrorToast(e);
+        }
+      });
+    }
+    if (storageClearBtn && !storageClearBtn.dataset.wired) {
+      storageClearBtn.dataset.wired = "1";
+      storageClearBtn.addEventListener("click", () => {
+        storageInput.value = "";
+        storageClearBtn.hidden = true;
       });
     }
 
@@ -1261,7 +1368,78 @@ async function openInstall() {
   applyI18n($("#modal-install"));
 }
 
-$("#btn-install").addEventListener("click", openInstall);
+// New-profile dropdown: button toggles a small menu with one item per
+// OS family. Clicking an item opens the install modal with that family
+// pre-selected and the OS picker section hidden. Keyboard shortcut N
+// (defined later) opens the menu too, then arrows / enter navigate.
+(() => {
+  const btn = $("#btn-install");
+  const menu = $("#new-profile-menu");
+  if (!btn || !menu) return;
+
+  const positionMenu = () => {
+    menu.style.top = "-9999px";
+    menu.style.left = "-9999px";
+    menu.classList.add("open");
+    const btnRect = btn.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const gap = 6;
+    let top = btnRect.bottom + gap;
+    if (top + menuRect.height > window.innerHeight - 8) {
+      top = btnRect.top - menuRect.height - gap;
+    }
+    let left = btnRect.left;
+    if (left + menuRect.width > window.innerWidth - 8) {
+      left = window.innerWidth - menuRect.width - 8;
+    }
+    menu.style.top = `${Math.max(8, top)}px`;
+    menu.style.left = `${Math.max(8, left)}px`;
+  };
+
+  const openMenu = () => {
+    positionMenu();
+    btn.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() =>
+      menu.querySelector(".menu-item")?.focus({ preventScroll: true })
+    );
+  };
+
+  const closeMenu = () => {
+    menu.classList.remove("open");
+    menu.style.top = menu.style.left = "";
+    btn.setAttribute("aria-expanded", "false");
+  };
+
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (menu.classList.contains("open")) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  });
+
+  menu.addEventListener("click", (ev) => {
+    const item = ev.target.closest(".menu-item");
+    if (!item) return;
+    const family = item.dataset.family;
+    closeMenu();
+    openInstall(family || null);
+  });
+
+  document.addEventListener("click", (ev) => {
+    if (!menu.classList.contains("open")) return;
+    if (menu.contains(ev.target) || btn.contains(ev.target)) return;
+    closeMenu();
+  });
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && menu.classList.contains("open")) {
+      closeMenu();
+      btn.focus();
+    }
+  });
+})();
 
 $("#form-install").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1287,6 +1465,7 @@ $("#form-install").addEventListener("submit", async (ev) => {
     keyboard:    isWindows ? (fd.get("keyboard") || "").toString().trim() : "",
     bundles:     isWindows ? picked.join(",") : "",
     gpuBdf:      (fd.get("gpu") || "").toString(),
+    storagePath: (fd.get("storage_path") || "").toString().trim(),
   };
   if (family === "linux_iso" && !params.isoPath) {
     showToast(t("toast.genericError", { msg: "Selecione o arquivo ISO." }), "error");

@@ -21,9 +21,19 @@ pub fn stop(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// "Force kill" semantics for the UI. We learned the hard way that
+/// `docker kill` (plain SIGKILL) doesn't recover containers stuck in
+/// the "tried to kill container, but did not receive an exit event"
+/// state — the daemon hangs forever waiting for an exit notification
+/// the kernel already swallowed. `docker rm -f` does the same SIGKILL
+/// but follows up with `containerd-shim` cleanup that also rescues
+/// zombie states. We try kill first as a courtesy (most healthy
+/// containers exit cleanly that way), then unconditionally run
+/// `rm -f` to guarantee the slot is free for a re-launch.
 pub fn kill(name: &str) -> Result<()> {
     let c = paths::profile_container(name);
-    docker::kill(&c)?;
+    let _ = docker::kill(&c); // best-effort SIGKILL; ignore daemon errors
+    docker::rm_force(&c)?;
     gpu_hooks::cleanup_after_stop(name);
     Ok(())
 }
@@ -46,15 +56,52 @@ pub fn update(name: &str) -> Result<()> {
     docker::compose_run(name, &["up", "-d"])
 }
 
-pub fn remove(name: &str) -> Result<()> {
+/// Remove a profile. If `delete_storage` is true and the profile was
+/// created with a custom `STORAGE_DIR` (i.e. somewhere outside the
+/// default `profile_data_dir`), that directory is also deleted on disk.
+/// `profile::remove_tree` already removes the default storage path
+/// (which lives under `profile_data_dir`), so the custom-path branch
+/// only fires when the user picked a path elsewhere.
+pub fn remove(name: &str, delete_storage: bool) -> Result<()> {
     if !profile::exists(name) {
         bail!("Perfil '{}' não existe.", name);
     }
+
+    // Capture custom storage path BEFORE remove_tree wipes the env file.
+    let custom_storage = if delete_storage {
+        env_file::read(&paths::profile_env_file(name))
+            .ok()
+            .and_then(|map| {
+                let raw = env_file::get(&map, "STORAGE_DIR");
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    return None;
+                }
+                let custom = std::path::PathBuf::from(raw);
+                let default = paths::profile_storage_dir(name);
+                if custom == default {
+                    None
+                } else {
+                    Some(custom)
+                }
+            })
+    } else {
+        None
+    };
+
     let c = paths::profile_container(name);
     let _ = docker::compose_run(name, &["down"]);
     let _ = docker::rm_force(&c);
     gpu_hooks::cleanup_after_stop(name);
     profile::remove_tree(name)?;
+
+    if let Some(path) = custom_storage {
+        if path.exists() {
+            // Best-effort: ignore errors so a broken/locked custom path
+            // doesn't leave the rest of the cleanup half-done.
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
 
     if profile::get_default().as_deref() == Some(name) {
         let others = profile::list_names();

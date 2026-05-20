@@ -6,24 +6,22 @@ const fakeT = (key) => key;
 const icons = { play: "PLAY" };
 const deps = { t: fakeT, icons };
 
-test("modeMeta returns RDP for connect_mode='rdp'", () => {
+test("modeMeta returns Web badge for any connect_mode", () => {
   assert.deepEqual(modeMeta({ connect_mode: "rdp" }), {
-    label: "RDP",
+    label: "Web",
     className: "is-rdp",
   });
-});
-
-test("modeMeta returns VNC for connect_mode='web_vnc'", () => {
   assert.deepEqual(modeMeta({ connect_mode: "web_vnc" }), {
-    label: "VNC",
+    label: "Web",
     className: "is-web_vnc",
   });
 });
 
-test("modeMeta defaults to RDP when connect_mode is missing", () => {
-  assert.equal(modeMeta({}).label, "RDP");
-  assert.equal(modeMeta(undefined).label, "RDP");
-  assert.equal(modeMeta(null).label, "RDP");
+test("modeMeta defaults to web_vnc when connect_mode is missing", () => {
+  assert.equal(modeMeta({}).label, "Web");
+  assert.equal(modeMeta(undefined).label, "Web");
+  assert.equal(modeMeta(null).label, "Web");
+  assert.equal(modeMeta({}).className, "is-web_vnc");
 });
 
 test("profileState passes through known docker states", () => {

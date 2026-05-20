@@ -101,6 +101,8 @@ pub struct InstallArgs {
     pub boot: Option<String>,
     #[serde(default, rename = "isoPath", alias = "iso_path")]
     pub iso_path: Option<String>,
+    #[serde(default, rename = "storagePath", alias = "storage_path")]
+    pub storage_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -287,79 +289,39 @@ async fn launch_profile(
             message,
         );
     };
+    let _ = mode; // Reserved for future per-profile overrides; today everything goes web.
     let join =
         tauri::async_runtime::spawn_blocking(move || -> Result<OperationResult, LaunchError> {
             use crate::core::docker;
             use commands::launch as cmd_launch;
             let docker_cli = CliDocker;
-            emit("preflight", "Verificando KVM, Docker e cliente RDP...");
-            match mode {
-                ConnectMode::Rdp => {
-                    docker::preflight_kvm()?;
-                    docker::preflight_docker_installed()?;
-                    docker::preflight_docker_daemon()?;
-                    docker::preflight_freerdp()?;
-                }
-                ConnectMode::WebVnc => {
-                    docker::preflight_kvm()?;
-                    docker::preflight_docker_installed()?;
-                    docker::preflight_docker_daemon()?;
-                }
-            }
+            emit("preflight", "Verificando KVM e Docker...");
+            docker::preflight_kvm()?;
+            docker::preflight_docker_installed()?;
+            docker::preflight_docker_daemon()?;
 
             emit("starting", "Subindo container Docker...");
             let transition = cmd_launch::ensure_started(&profile_name, &docker_cli)?;
             let needs_wait = matches!(transition, cmd_launch::ContainerTransition::Recreated);
 
-            match mode {
-                ConnectMode::Rdp => {
-                    if needs_wait {
-                        emit(
-                            "wait_windows",
-                            "Aguardando Windows iniciar (pode levar 1-4min na primeira vez)...",
-                        );
-                        let container = paths::profile_container(&profile_name);
-                        cmd_launch::wait_for_windows(&profile_name, &container, &docker_cli)?;
-                    }
-                    let env = crate::core::env_file::read(&paths::profile_env_file(&profile_name))
-                        .map_err(|e| LaunchError::Other {
-                            message: format!("falha lendo env: {e:#}"),
-                        })?;
-                    let rdp_port = crate::core::env_file::get_u16(&env, "RDP_PORT");
-                    emit(
-                        "wait_rdp",
-                        "Aguardando o serviço RDP responder dentro do Windows...",
-                    );
-                    cmd_launch::wait_for_rdp_handshake(&profile_name, rdp_port)?;
-                    emit("launching", "Abrindo cliente RDP...");
-                    crate::core::rdp::launch(&profile_name).map_err(|e| LaunchError::Other {
-                        message: format!("{e:#}"),
-                    })?;
-                }
-                ConnectMode::WebVnc => {
-                    if needs_wait {
-                        let env =
-                            crate::core::env_file::read(&paths::profile_env_file(&profile_name))
-                                .map_err(|e| LaunchError::Other {
-                                    message: format!("falha lendo env: {e:#}"),
-                                })?;
-                        let web_port = crate::core::env_file::get_u16(&env, "WEB_PORT");
-                        emit("wait_vnc", "Aguardando QEMU + noVNC responder...");
-                        cmd_launch::wait_for_web_port(&profile_name, web_port)?;
-                    }
-                    let env = crate::core::env_file::read(&paths::profile_env_file(&profile_name))
-                        .map_err(|e| LaunchError::Other {
-                            message: format!("falha lendo env: {e:#}"),
-                        })?;
-                    let web_port = crate::core::env_file::get_u16(&env, "WEB_PORT");
-                    emit("launching", "Abrindo cliente noVNC no navegador...");
-                    open_web_vnc_window(&app_clone, &profile_name, web_port).map_err(|e| {
-                        LaunchError::Other {
-                            message: format!("{e:#}"),
-                        }
-                    })?;
-                }
+            let env = crate::core::env_file::read(&paths::profile_env_file(&profile_name))
+                .map_err(|e| LaunchError::Other {
+                    message: format!("falha lendo env: {e:#}"),
+                })?;
+            let web_port = crate::core::env_file::get_u16(&env, "WEB_PORT");
+
+            if needs_wait {
+                emit("wait_vnc", "Aguardando QEMU + noVNC responder...");
+                cmd_launch::wait_for_web_port(&profile_name, web_port)?;
             }
+
+            emit("launching", "Abrindo viewer noVNC no navegador...");
+            open_web_vnc_window(&app_clone, &profile_name, web_port).map_err(|e| {
+                LaunchError::Other {
+                    message: format!("{e:#}"),
+                }
+            })?;
+
             Ok(OperationResult {
                 profile: profile_name,
                 op: "launch".into(),
@@ -432,6 +394,19 @@ async fn pick_iso_file(app: AppHandle) -> Result<Option<String>, String> {
         .pick_file(move |file| {
             let _ = tx.send(file.and_then(|f| f.into_path().ok()));
         });
+    let path = rx.recv().map_err(|e| e.to_string())?;
+    Ok(path.map(|p| p.display().to_string()))
+}
+
+/// Open a folder picker so the user can pick where the VM disk image
+/// will live for the profile being created. Mirrors `pick_iso_file`.
+#[tauri::command]
+async fn pick_storage_dir(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog().file().pick_folder(move |dir| {
+        let _ = tx.send(dir.and_then(|d| d.into_path().ok()));
+    });
     let path = rx.recv().map_err(|e| e.to_string())?;
     Ok(path.map(|p| p.display().to_string()))
 }
@@ -576,6 +551,7 @@ async fn install_profile(app: AppHandle, params: InstallArgs) -> Result<Operatio
         image_family: params.image_family,
         boot: params.boot,
         iso_path: params.iso_path,
+        storage_path: params.storage_path,
     };
     let profile_name = params.name;
     let profile_for_error = profile_name.clone();
@@ -610,7 +586,8 @@ async fn remove_profile(app: AppHandle, name: String) -> Result<String, String> 
         "Removendo container e arquivos do perfil...",
     );
     let n = name.clone();
-    let join = tauri::async_runtime::spawn_blocking(move || commands::lifecycle::remove(&n)).await;
+    let join =
+        tauri::async_runtime::spawn_blocking(move || commands::lifecycle::remove(&n, true)).await;
     let res = match join {
         Ok(inner) => inner.map_err(|e| e.to_string()),
         Err(e) => Err(e.to_string()),
@@ -853,6 +830,7 @@ pub fn run() {
             launch_profile,
             open_web_vnc,
             pick_iso_file,
+            pick_storage_dir,
             stop_profile,
             kill_profile,
             pause_profile,

@@ -23,25 +23,21 @@ impl ConnectMode {
 
 /// Resolve which connect mode applies to a profile.
 ///
-/// Phase 1: Windows → RDP, anything Linux → web-VNC.
-/// Phase 2 will switch curated distros (ubuntu/kubuntu/xubuntu/mint/debian/fedora)
-/// to RDP once the cloud-init xrdp autoinstall lands.
-pub fn resolve(family: ImageFamily, _boot: &str) -> ConnectMode {
-    match family {
-        ImageFamily::Windows => ConnectMode::Rdp,
-        ImageFamily::LinuxDistro | ImageFamily::LinuxIso => ConnectMode::WebVnc,
-    }
+/// Now uniformly returns [`ConnectMode::WebVnc`]: both dockurr/windows
+/// and dockurr/dockur serve a built-in noVNC web viewer on `WEB_PORT`,
+/// and there is no longer a hard dependency on `xfreerdp3` / `mstsc` on
+/// the host. The enum is kept to preserve the on-wire shape for the
+/// frontend; the `Rdp` variant remains for serialization compat but is
+/// not produced by this resolver.
+pub fn resolve(_family: ImageFamily, _boot: &str) -> ConnectMode {
+    ConnectMode::WebVnc
 }
 
-/// Best-effort lookup from a profile's config.env. Falls back to RDP if env
-/// is unreadable (matches legacy behavior — every existing profile is Windows).
+/// Best-effort lookup from a profile's config.env. Always returns
+/// [`ConnectMode::WebVnc`]; the lookup is preserved so failures to
+/// read the env still don't crash and future per-profile overrides
+/// can be added here without changing call sites.
 pub fn resolve_for_profile(profile: &str) -> ConnectMode {
-    let env_path = paths::profile_env_file(profile);
-    let map = match env_file::read(&env_path) {
-        Ok(m) => m,
-        Err(_) => return ConnectMode::Rdp,
-    };
-    let family = ImageFamily::from_env_map(&map);
-    let boot = env_file::get(&map, "BOOT");
-    resolve(family, boot)
+    let _ = env_file::read(&paths::profile_env_file(profile));
+    ConnectMode::WebVnc
 }

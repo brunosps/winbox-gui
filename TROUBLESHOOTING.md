@@ -7,44 +7,38 @@ veja [`docs/DEBUGGING.md`](docs/DEBUGGING.md).
 
 ---
 
-## 1. Cliquei "Iniciar" / "Conectar" e nada acontece
+## 1. Cliquei "Conectar" e nada (ou abriu a aba errada)
 
-**Sintoma**: o botão fica desabilitado, vira ativo de novo, mas
-nenhuma janela RDP abre e nenhum toast de erro aparece. Mais comum em
-perfis Windows.
+**Sintoma**: clico em "Conectar" e nada acontece, ou a aba do navegador
+abre numa URL que não carrega.
 
-**Diagnóstico** — confira se o cliente RDP está instalado:
+**Como funciona hoje**: tanto perfis Windows quanto Linux conectam pelo
+**viewer noVNC no navegador** — o app abre
+`http://127.0.0.1:<WEB_PORT>/?autoconnect=true&resize=scale` no browser
+padrão. **Não há mais dependência de `xfreerdp3`/`mstsc`**; se você viu
+o erro `free_rdp_missing` em versões antigas, ele não existe mais.
 
-```bash
-xfreerdp3 --version
-```
-
-Se o comando não existir, o backend ainda assim chega a `spawn`-ar o
-processo, mas a janela do FreeRDP falha em iniciar silenciosamente
-porque seu stderr era jogado em `/dev/null` em versões antigas.
-
-**Fix**:
+**Diagnóstico**:
 
 ```bash
-sudo apt install -y freerdp3-x11   # Ubuntu / Debian
-sudo dnf install freerdp           # Fedora
+# o container está de pé e a WEB_PORT respondendo?
+docker ps --filter name=winbox-<perfil> --format '{{.Status}} {{.Ports}}'
+grep ^WEB_PORT ~/.config/winbox/profiles/<perfil>/config.env
+curl -sI http://127.0.0.1:<WEB_PORT>/ | head -1
 ```
 
-Após a versão atual, o app captura stderr e mostra o toast
-**"xfreerdp3 não está instalado"** quando o binário falta — então
-você deve ver a mensagem em vez do silêncio.
+**Fix**: se o container não está rodando, use "Conectar" de novo (ele
+faz `compose up`). Se a porta não responde mas o container está up, o
+guest ainda está bootando — acompanhe pelos logs (seção 4).
 
-**Log de evidência**: `~/.cache/winbox/rdp-<perfil>.log` (criado a
-partir do commit que ativou a captura — se o arquivo não existe,
-xfreerdp nem chegou a ser invocado).
+**Log de evidência**: `docker logs winbox-<perfil>`.
 
 ---
 
 ## 2. Janela VNC abre toda preta ("Display output is not active")
 
-**Sintoma**: ao iniciar um perfil Linux, a janela de VNC carrega o
-noVNC mas exibe a mensagem **"Display output is not active."** O VM
-está rodando, só não enxergamos.
+**Sintoma**: ao iniciar um perfil Linux, o noVNC carrega mas exibe
+**"Display output is not active."** A VM está rodando, só não enxergamos.
 
 **Diagnóstico** — confira se o perfil tem GPU passthrough ativo:
 
@@ -59,38 +53,125 @@ ocioso.
 
 **Fix** — escolha:
 
-- **(A) Plugar um monitor físico** na saída da GPU passada. Esse é o
-  uso pretendido de passthrough.
+- **(A) Plugar um monitor físico** na saída da GPU passada.
 - **(B) Desligar o passthrough**: edite o `config.env` do perfil,
-  deixe `GPU_BDF=` vazio, e reinicie o container. O virtio-vga volta a
-  desenhar e a noVNC mostra o desktop. Você perde aceleração 3D real.
+  deixe `GPU_BDF=` vazio, e reinicie o container.
 
-**Log de evidência**: você pode tirar um screenshot do framebuffer do
-QEMU pelo monitor (porta 7100) e converter:
+---
+
+## 3. Storage lento / instalação do Windows trava ou demora horas
+
+**Sintoma**: criei o perfil apontando o "Local de armazenamento" para um
+caminho em `/mnt/c`, `/mnt/d`, `/mnt/e`, etc., e a instalação do Windows
+fica eternamente no logo "Windows for Docker" ou trava.
+
+**Diagnóstico** — esses caminhos são **drvfs** (a ponte WSL↔Windows),
+que entrega ~104 MB/s contra ~3 GB/s do ext4 nativo da distro (30×). VM
+disk image em drvfs é inviável.
 
 ```bash
-docker exec winbox-<perfil> sh -c '
-  rm -f /tmp/s.ppm
-  (sleep 0.5; printf "screendump /tmp/s.ppm\n"; sleep 2; printf "quit\n") \
-    | nc localhost 7100 >/dev/null
-'
-docker cp winbox-<perfil>:/tmp/s.ppm /tmp/s.ppm
-ffmpeg -y -i /tmp/s.ppm -update 1 /tmp/s.png
-# abra /tmp/s.png — se vier "Display output is not active", é o caso (A/B).
+grep ^STORAGE_DIR ~/.config/winbox/profiles/<perfil>/config.env
+# se começa com /mnt/<letra>/ → é drvfs, problema.
+```
+
+**Fix**: o app **rejeita** caminhos `/mnt/<letra>/` na criação do perfil
+(tanto no Browse quanto na validação do backend). Use um caminho dentro
+do WSL, ex.: `/home/<user>/winbox-disks/<perfil>`. Ele grava no **mesmo
+disco físico** (o `ext4.vhdx` da distro), mas via I/O nativo rápido.
+
+Para um perfil já criado errado, edite o `.env` e mova:
+
+```bash
+docker rm -f winbox-<perfil>
+mkdir -p /home/<user>/winbox-disks/<perfil>
+sed -i 's#^STORAGE_DIR=.*#STORAGE_DIR=/home/<user>/winbox-disks/<perfil>#' \
+  ~/.config/winbox/profiles/<perfil>/config.env
+# conecte de novo pelo app
 ```
 
 ---
 
-## 3. "Erro no docker compose up" / container name in use
+## 4. Windows não termina de iniciar (timeout de ~4min)
 
-**Sintoma**: ao subir um perfil que já rodou antes, o app retorna um
-erro mencionando algo como `container name "winbox-<x>" is already in
-use`.
+**Sintoma**: **"Windows '<perfil>' não terminou de iniciar a tempo."**
 
-**Diagnóstico** — versões atuais do app fazem `docker rm -f` defensivo
-antes de `compose up` quando o container está em `exited`, `created`
-ou `dead`, então esse sintoma só deve aparecer se você rodou
-`docker compose` manualmente sem `-p winbox-<perfil>`.
+No noVNC pode aparecer `failed to load Boot0002 "UEFI QEMU HARDDISK" Not
+Found` → cai pro `Boot0001 DVD-ROM` → logo "Windows for Docker". **Isso
+é normal** numa instalação nova: disco vazio, então o UEFI cai pro DVD
+(ISO) e começa o setup. Não é o erro.
+
+**Diagnóstico** — abra os logs do perfil pelo app ("Mais ações" → "Logs")
+ou via CLI:
+
+```bash
+docker logs --tail 100 winbox-<perfil>
+```
+
+A primeira instalação baixa uma ISO de ~5 GB (`Downloading Windows...`)
+e roda o setup automatizado. Em drvfs isso leva horas; em ext4, ~20-40min.
+
+**Fix**: espere terminar (acompanhe pelos logs até `Windows started
+successfully`). Se estiver em drvfs, mova o storage (seção 3). **Não
+reinicie o app nem `wsl --shutdown` durante o setup** — interromper mata
+a instalação e ela recomeça do zero.
+
+---
+
+## 5. A VM ficou com menos RAM do que configurei
+
+**Sintoma**: configurei RAM=12G mas o Gerenciador de Tarefas do Windows
+mostra 8G (ou outro valor menor).
+
+**Diagnóstico** — o dockurr **ajusta o RAM_SIZE pra caber na memória
+livre da distro** (proteção dele). Procure no log:
+
+```bash
+docker logs winbox-<perfil> 2>&1 | grep -i 'RAM_SIZE.*too high'
+# "Your configured RAM_SIZE of 12 GB is too high for the 9.5 GB available..."
+```
+
+A distro WSL tem um teto (`memory=` no `.wslconfig`), e os **outros
+containers rodando** (bancos, apps, outras VMs) consomem parte dele.
+
+**Fix** — escolha:
+
+- Parar containers que não estão em uso para liberar RAM, depois
+  **Restart** na VM (o dockurr re-detecta a RAM no boot).
+- Aumentar `memory=` no `C:\Users\<user>\.wslconfig` e `wsl --shutdown`
+  (derruba todos os containers).
+- Reduzir o RAM do perfil para um valor que sempre caiba.
+
+---
+
+## 6. Container travado / não para ("Force kill")
+
+**Sintoma**: "Desligar" fica preso, ou aparece `tried to kill container,
+but did not receive an exit event`. Comum quando o Windows ainda está em
+setup (o dockurr não consegue mandar ACPI durante a instalação).
+
+**Diagnóstico**:
+
+```bash
+docker inspect winbox-<perfil> --format '{{.State.Status}} {{.State.Pid}}'
+# Pid=0 com Status não-exited = container fantasma
+```
+
+**Fix**: use **"Force kill"** no menu do perfil — agora ele faz `docker
+kill` (best-effort) seguido de `docker rm -f`, que recupera até
+containers em estado zombie. Manualmente:
+
+```bash
+docker rm -f winbox-<perfil>
+```
+
+O disco da VM persiste no `STORAGE_DIR`; só o container é recriado no
+próximo "Conectar".
+
+---
+
+## 7. "Erro no docker compose up" / container name in use
+
+**Sintoma**: `container name "winbox-<x>" is already in use`.
 
 **Fix**:
 
@@ -98,78 +179,12 @@ ou `dead`, então esse sintoma só deve aparecer se você rodou
 docker rm -f winbox-<perfil>
 ```
 
-E suba pelo app de novo. Se o problema persistir, confira que a versão
-do app está atualizada (deve incluir o commit
-`fix(core): unblock VM launch flows and pin Docker image tags`).
+E suba pelo app de novo. O app já faz `docker rm -f` defensivo antes de
+`compose up` quando o container está em `exited`/`created`/`dead`.
 
-**Log de evidência**: a mensagem do toast traz o `code:
-"docker_daemon_down"`, `"image_pull_failed"`, etc. — anote.
-
----
-
-## 4. Windows não termina de iniciar (timeout de ~4min)
-
-**Sintoma**: o app mostra **"Windows '<perfil>' não terminou de
-iniciar a tempo. Na primeira execução o dockur baixa a ISO — abra os
-logs do perfil para acompanhar."**
-
-**Diagnóstico** — abra os logs do perfil pelo próprio app (menu
-"Mais ações" → "Logs") ou via CLI:
-
-```bash
-docker logs --tail 100 winbox-<perfil>
-```
-
-Você vai ver linhas tipo:
-
-```
-❯ Downloading Windows.iso ... 32%
-```
-
-A primeira instalação de cada perfil Windows baixa uma ISO de ~5 GB.
-A 240 segundos não é suficiente para isso em conexão doméstica.
-
-**Fix**:
-
-- Esperar terminar o download (acompanhe pelos logs). Quando aparecer
-  `windows started successfully`, o app já vai detectar.
-- Em conexões muito lentas, pode ser preciso reiniciar o launch após
-  a ISO completar.
-
-**Log de evidência**: `docker logs winbox-<perfil>` mostra o progresso
-do dockur em tempo real.
-
----
-
-## 5. Atalhos do Windows / Linux não chegam ao guest
-
-**Sintoma**: aperto a tecla **Win** dentro da janela RDP e o menu do GNOME/KDE
-do host abre (em vez do menu Iniciar do Windows). Mesma coisa para
-`Alt+Tab`, `Super+L`, etc.
-
-**Por quê**: por padrão o servidor X só envia teclas "normais" para o cliente
-de janela. Teclas com modificadores reservados pelo WM ficam no host. xfreerdp
-contorna isso ativando o **grab de teclado** (`+grab-keyboard`), que faz com
-que TODAS as teclas vão para o guest enquanto a janela RDP estiver focada.
-
-**Fix (Windows)**: já está ativo a partir desta versão. Como **soltar** o grab
-quando quiser usar atalhos do host:
-
-- Aperte **`Right CTRL`** (Ctrl da direita) — xfreerdp libera o teclado e o mouse.
-- Ou simplesmente clique fora da janela RDP.
-
-**Linux via noVNC (navegador)**: o browser não permite capturar a tecla Super
-(restrição de sandbox). Use uma das alternativas:
-
-- Toolbar do noVNC: clique no menu lateral → "Send Key" → "Windows".
-- Cliente VNC nativo: `remmina vnc://127.0.0.1:<WEB_PORT>` (ou tigervnc-viewer)
-  com a opção *grab keyboard* habilitada. A porta 5900 do container expõe VNC
-  raw também — mas só dentro da rede do container. Para acesso direto, mapeie
-  `5900:5900` em `EXTRA_PORTS` do perfil.
-
-**Log de evidência**: tente `Right CTRL` e depois aperte Win. Se ainda não
-funcionar, o servidor RDP do guest pode estar mapeando o keyboard layout
-errado — ajuste o profile language/keyboard.
+**Log de evidência**: o toast traz o `code` (`docker_daemon_down`,
+`image_pull_failed`, `wsl_distro_down`, `disk_full`,
+`storage_path_invalid`, etc.) — anote.
 
 ---
 
@@ -180,4 +195,4 @@ Se nada acima cobre o seu caso, abra um issue com:
 1. Saída de `docker ps -a --filter name=winbox`.
 2. Conteúdo do toast de erro (com o `code`).
 3. Trecho relevante de `docker logs winbox-<perfil>`.
-4. Trecho de `~/.cache/winbox/rdp-<perfil>.log`, se aplicável.
+4. `grep -E 'STORAGE_DIR|RAM_SIZE' ~/.config/winbox/profiles/<perfil>/config.env`.

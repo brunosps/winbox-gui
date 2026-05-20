@@ -378,34 +378,10 @@ textarea.field-input {
   box-shadow: var(--shadow-sm);
 }
 
-.ops-intro,
 .ops-health,
 .ops-events,
 .ops-metrics {
   min-width: 0;
-}
-
-.ops-intro {
-  display: grid;
-  align-content: center;
-  gap: 6px;
-}
-
-.ops-intro h2 {
-  margin: 0;
-  color: var(--title);
-  font-size: 20px;
-  font-weight: 800;
-  line-height: 1.15;
-  letter-spacing: 0;
-}
-
-.ops-intro p {
-  max-width: 420px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .ops-health,
@@ -1298,6 +1274,14 @@ textarea.field-input {
   letter-spacing: 0.08em;
 }
 
+/* OS-family visibility toggle. Used by applyOsFamilyVisibility() to
+   hide .section / .field blocks that don't match the selected OS.
+   Must override .field/.section/.field-row's display:grid below. */
+.os-hidden,
+[hidden] {
+  display: none !important;
+}
+
 .field,
 .field-row {
   display: grid;
@@ -1584,19 +1568,16 @@ pre {
   }
 
   .ops-bar {
-    grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "health  health"
+      "events  metrics";
     align-items: start;
   }
 
-  .ops-intro,
-  .ops-events {
-    grid-column: 1;
-  }
-
-  .ops-health,
-  .ops-metrics {
-    grid-column: 2;
-  }
+  .ops-health  { grid-area: health; }
+  .ops-events  { grid-area: events; }
+  .ops-metrics { grid-area: metrics; }
 
   .ops-metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1662,21 +1643,21 @@ pre {
 }
 
 @media (min-width: 1360px) {
+  /* 3-column layout after the "Fleet console" intro block was dropped
+     on 2026-05-19. Health gets a bit more breathing room than before
+     to compensate for the column it now lives in. */
   .ops-bar {
     grid-template-columns:
-      minmax(220px, 0.75fr)
-      minmax(360px, 1.2fr)
+      minmax(360px, 1.3fr)
       minmax(280px, 0.9fr)
       minmax(320px, 1fr);
+    grid-template-areas: "health events metrics";
     align-items: stretch;
   }
 
-  .ops-intro,
-  .ops-health,
-  .ops-events,
-  .ops-metrics {
-    grid-column: auto;
-  }
+  .ops-health  { grid-area: health; }
+  .ops-events  { grid-area: events; }
+  .ops-metrics { grid-area: metrics; }
 
   .ops-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
