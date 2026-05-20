@@ -25,6 +25,9 @@ dialoguer = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 walkdir = "2"
 which = "6"
+# Cross-platform host info (RAM, disk). Replaces /proc + df so the same
+# code reports correct numbers on Linux and Windows (WMI under the hood).
+sysinfo = { version = "0.32", default-features = false, features = ["system", "disk"] }
 
 [profile.release]
 panic = "abort"
