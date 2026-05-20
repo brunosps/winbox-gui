@@ -24,9 +24,15 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": ["deb", "appimage"],
-    "icon": [],
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "category": "Utility",
     "shortDescription": "Windows VM manager",
     "longDescription": "GUI for winbox — manages dockur/windows VMs with profiles, bundles and persistent state"
