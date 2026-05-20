@@ -250,6 +250,13 @@ fn host_health() -> Result<health::HostHealthReport, String> {
     Ok(health::report())
 }
 
+/// First-run backend detection: reports whether WSL2 / distro / Docker /
+/// dockurr image are present. Read-only — never triggers installs.
+#[tauri::command]
+fn bootstrap_status() -> Result<crate::core::bootstrap::BootstrapStatus, String> {
+    Ok(crate::core::bootstrap::check_status())
+}
+
 #[tauri::command]
 fn list_bundles() -> Result<Vec<core_bundles::Bundle>, String> {
     Ok(core_bundles::list())
@@ -841,6 +848,7 @@ pub fn run() {
             list_supported_distros,
             host_info,
             host_health,
+            bootstrap_status,
             version,
             get_profile_config,
             update_profile,

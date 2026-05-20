@@ -1,3 +1,4 @@
+pub mod bootstrap;
 pub mod bundles;
 pub mod compose;
 pub mod connect;
