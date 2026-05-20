@@ -1637,6 +1637,93 @@ if (langSwitch) {
   });
 }
 
+// ─── Bootstrap wizard (first-run backend setup) ─────────────────────────
+const BOOTSTRAP_STEP_FOR = {
+  wsl2: "install_wsl",
+  distro: "import_distro",
+  docker: "start_docker",
+  image: "pull_image",
+};
+
+function bootstrapCheckRow(c) {
+  const icon = c.state === "ok" ? "✓" : (c.state === "missing" ? "!" : "?");
+  const tone = c.state === "ok" ? "ok" : (c.state === "missing" ? "warn" : "muted");
+  const step = BOOTSTRAP_STEP_FOR[c.id];
+  const action = (c.state !== "ok" && step)
+    ? `<button class="btn btn-primary btn-sm" data-bootstrap-step="${escapeAttr(step)}">${t("bootstrap.fix")}</button>`
+    : "";
+  return `
+    <div class="bootstrap-row" data-tone="${tone}">
+      <span class="bootstrap-state" data-tone="${tone}">${icon}</span>
+      <span class="bootstrap-info">
+        <strong>${escapeHtml(c.label)}</strong>
+        <span class="bootstrap-detail">${escapeHtml(c.detail)}</span>
+      </span>
+      ${action}
+    </div>`;
+}
+
+async function renderBootstrap() {
+  const box = $("#bootstrap-checks");
+  if (!box) return null;
+  let status;
+  try {
+    status = await invoke("bootstrap_status");
+  } catch (e) {
+    box.innerHTML = `<div class="gpu-note warn">${escapeHtml(formatErrorForToast(e))}</div>`;
+    return null;
+  }
+  box.innerHTML = (status.checks || []).map(bootstrapCheckRow).join("");
+  return status;
+}
+
+async function runBootstrapStep(step, { force = false } = {}) {
+  try {
+    const outcome = await invoke("bootstrap_run_step", { step, force });
+    if (outcome.outcome === "needs_confirmation") {
+      const ok = await confirmDialog(
+        t("bootstrap.confirm.title"),
+        outcome.reason,
+        t("bootstrap.confirm.yes"),
+      );
+      if (ok) return runBootstrapStep(step, { force: true });
+      return;
+    }
+    if (outcome.outcome === "failed") {
+      showToast(t("toast.genericError", { msg: outcome.error }), "error");
+    } else {
+      showToast(outcome.message || "ok", "success");
+    }
+  } catch (e) {
+    showErrorToast(e);
+  }
+  await renderBootstrap();
+}
+
+async function checkBootstrapOnBoot() {
+  // Only nag when the backend isn't ready. On Linux this is always ready.
+  try {
+    const status = await invoke("bootstrap_status");
+    if (status && status.ready === false) {
+      await renderBootstrap();
+      openModal("#modal-bootstrap");
+      applyI18n($("#modal-bootstrap"));
+    }
+  } catch { /* ignore — bootstrap is best-effort */ }
+}
+
+(() => {
+  const recheck = $("#bootstrap-recheck");
+  if (recheck) recheck.addEventListener("click", () => renderBootstrap());
+  const box = $("#bootstrap-checks");
+  if (box) {
+    box.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-bootstrap-step]");
+      if (btn) runBootstrapStep(btn.dataset.bootstrapStep);
+    });
+  }
+})();
+
 // Initial i18n pass
 applyI18n();
 
@@ -1644,3 +1731,4 @@ setInterval(render, 3000);
 
 loadVersion();
 render();
+checkBootstrapOnBoot();

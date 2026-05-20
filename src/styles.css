@@ -1282,6 +1282,45 @@ textarea.field-input {
   display: none !important;
 }
 
+/* Bootstrap wizard rows */
+.bootstrap-checks {
+  display: grid;
+  gap: 10px;
+}
+.bootstrap-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+.bootstrap-state {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 800;
+  color: #fff;
+}
+.bootstrap-state[data-tone="ok"] { background: var(--ok); }
+.bootstrap-state[data-tone="warn"] { background: var(--warn); }
+.bootstrap-state[data-tone="muted"] { background: var(--muted); }
+.bootstrap-info {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.bootstrap-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .field,
 .field-row {
   display: grid;

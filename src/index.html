@@ -448,6 +448,26 @@
     </div>
   </div>
 
+  <!-- ═══ MODAL: bootstrap wizard (first-run backend setup) ═══ -->
+  <div id="modal-bootstrap" class="modal" role="dialog" aria-modal="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><span data-i18n="bootstrap.title">Configuração inicial</span></h2>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--muted);font-size:13px;margin-bottom:14px" data-i18n="bootstrap.intro">
+          O winbox precisa de um motor de VMs (WSL2 + Docker). Verifique e resolva o que falta:
+        </p>
+        <div id="bootstrap-checks" class="bootstrap-checks"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="bootstrap-recheck" data-i18n="bootstrap.recheck">Verificar de novo</button>
+        <button type="button" class="btn btn-ghost" data-close data-i18n="bootstrap.later">Depois</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="main.js"></script>
 </body>
 </html>
