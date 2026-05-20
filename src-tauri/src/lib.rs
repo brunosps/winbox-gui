@@ -257,6 +257,25 @@ fn bootstrap_status() -> Result<crate::core::bootstrap::BootstrapStatus, String>
     Ok(crate::core::bootstrap::check_status())
 }
 
+/// Run a single bootstrap step (user-initiated). For distro creation,
+/// pass `force = true` only after the user confirmed overwriting an
+/// existing distro — otherwise it returns `needs_confirmation`.
+#[tauri::command]
+async fn bootstrap_run_step(
+    app: AppHandle,
+    step: crate::core::bootstrap::BootstrapStep,
+    force: bool,
+) -> Result<crate::core::bootstrap::StepOutcome, String> {
+    let plan = crate::core::bootstrap::step_plan(step);
+    emit_progress(&app, "bootstrap", "bootstrap", "running", "running", &plan.description);
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        crate::core::bootstrap::run_step(step, force)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(outcome)
+}
+
 #[tauri::command]
 fn list_bundles() -> Result<Vec<core_bundles::Bundle>, String> {
     Ok(core_bundles::list())
@@ -849,6 +868,7 @@ pub fn run() {
             host_info,
             host_health,
             bootstrap_status,
+            bootstrap_run_step,
             version,
             get_profile_config,
             update_profile,

@@ -143,6 +143,112 @@ pub fn evaluate(p: &Probes) -> BootstrapStatus {
     BootstrapStatus { ready, checks }
 }
 
+// ── Action steps (codified; executed only by explicit user command) ─────
+
+/// Distro name the wizard creates. Deliberately distinct so it NEVER
+/// collides with a user's existing distro (e.g. Ubuntu-24.04).
+pub const ENGINE_DISTRO: &str = "winbox-engine";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BootstrapStep {
+    InstallWsl,
+    ImportDistro,
+    StartDocker,
+    PullImage,
+}
+
+/// The exact command a step would run, plus metadata. Pure — lets the UI
+/// preview the action and lets tests assert on it without executing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StepPlan {
+    pub program: String,
+    pub args: Vec<String>,
+    pub needs_admin: bool,
+    pub description: String,
+    /// If true, run_step must verify the engine distro does NOT already
+    /// exist before running, and ask the user instead of overwriting.
+    pub guards_distro: bool,
+}
+
+/// What `run_step` returns. `NeedsConfirmation` means a destructive
+/// precondition was detected (e.g. the distro already exists) and the
+/// caller must re-invoke with `force = true` only after the user agrees.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum StepOutcome {
+    Done { message: String },
+    NeedsConfirmation { reason: String },
+    Failed { error: String },
+}
+
+pub fn step_plan(step: BootstrapStep) -> StepPlan {
+    match step {
+        BootstrapStep::InstallWsl => StepPlan {
+            program: "wsl.exe".into(),
+            args: vec!["--install".into(), "--no-distribution".into()],
+            needs_admin: true,
+            description: "Instalar o recurso WSL2 (pode exigir reinício).".into(),
+            guards_distro: false,
+        },
+        BootstrapStep::ImportDistro => StepPlan {
+            program: "wsl.exe".into(),
+            args: vec![
+                "--install".into(),
+                "-d".into(),
+                "Ubuntu-24.04".into(),
+                "--name".into(),
+                ENGINE_DISTRO.into(),
+                "--no-launch".into(),
+            ],
+            needs_admin: false,
+            description: format!(
+                "Criar a distro '{ENGINE_DISTRO}' (nome próprio — não afeta suas distros)."
+            ),
+            guards_distro: true,
+        },
+        BootstrapStep::StartDocker => StepPlan {
+            program: "wsl.exe".into(),
+            args: vec![
+                "-d".into(),
+                ENGINE_DISTRO.into(),
+                "--".into(),
+                "sudo".into(),
+                "service".into(),
+                "docker".into(),
+                "start".into(),
+            ],
+            needs_admin: false,
+            description: "Iniciar o Docker dentro da distro.".into(),
+            guards_distro: false,
+        },
+        BootstrapStep::PullImage => StepPlan {
+            program: "wsl.exe".into(),
+            args: vec![
+                "-d".into(),
+                ENGINE_DISTRO.into(),
+                "--".into(),
+                "docker".into(),
+                "pull".into(),
+                "dockurr/windows".into(),
+            ],
+            needs_admin: false,
+            description: "Baixar a imagem dockurr/windows.".into(),
+            guards_distro: false,
+        },
+    }
+}
+
+/// Is `name` present in `wsl --list --quiet` output? Pure. Used to AVOID
+/// recreating/overwriting an existing distro (the bug that wiped a user's
+/// WSL in the past — never recreate without explicit confirmation).
+pub fn distro_exists(name: &str, wsl_list_output: &str) -> bool {
+    wsl_list_output
+        .lines()
+        .map(|l| l.trim())
+        .any(|l| l.eq_ignore_ascii_case(name))
+}
+
 // ── Platform probes ─────────────────────────────────────────────────────
 
 /// Gather the read-only probes and evaluate. On Windows this shells out
@@ -205,6 +311,58 @@ pub fn check_status() -> BootstrapStatus {
     evaluate(&probes)
 }
 
+/// Execute a bootstrap step. For distro creation, when `force` is false
+/// and the engine distro already exists, this returns `NeedsConfirmation`
+/// instead of running — the caller MUST surface that to the user and only
+/// re-invoke with `force = true` after explicit consent. We never
+/// overwrite an existing distro silently.
+#[cfg(target_os = "windows")]
+pub fn run_step(step: BootstrapStep, force: bool) -> StepOutcome {
+    use crate::core::health_wsl::decode_wsl_output;
+    use std::process::Command;
+
+    let plan = step_plan(step);
+
+    if plan.guards_distro && !force {
+        let list = Command::new("wsl.exe")
+            .args(["--list", "--quiet"])
+            .output()
+            .ok()
+            .map(|o| decode_wsl_output(&o.stdout))
+            .unwrap_or_default();
+        if distro_exists(ENGINE_DISTRO, &list) {
+            return StepOutcome::NeedsConfirmation {
+                reason: format!(
+                    "A distro '{ENGINE_DISTRO}' já existe. Recriá-la apagaria os dados dela. \
+                     Confirme para sobrescrever, ou cancele para usar a existente."
+                ),
+            };
+        }
+    }
+
+    let status = Command::new(&plan.program)
+        .args(&plan.args)
+        .status();
+    match status {
+        Ok(s) if s.success() => StepOutcome::Done {
+            message: plan.description.clone(),
+        },
+        Ok(s) => StepOutcome::Failed {
+            error: format!("'{}' saiu com código {}", plan.program, s),
+        },
+        Err(e) => StepOutcome::Failed {
+            error: format!("falha ao executar '{}': {e}", plan.program),
+        },
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn run_step(_step: BootstrapStep, _force: bool) -> StepOutcome {
+    StepOutcome::Failed {
+        error: "bootstrap steps são executados apenas no Windows".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +411,34 @@ mod tests {
         assert!(s.ready);
         assert_eq!(s.checks.len(), 4);
         assert!(s.checks.iter().all(|c| c.state == StepState::Ok));
+    }
+
+    #[test]
+    fn import_distro_uses_dedicated_name_and_guards() {
+        let plan = step_plan(BootstrapStep::ImportDistro);
+        assert!(plan.guards_distro, "distro creation must be guarded");
+        assert!(plan.args.iter().any(|a| a == ENGINE_DISTRO));
+        // Never targets a user distro name directly for creation.
+        assert!(plan.args.iter().any(|a| a == "--name"));
+        assert!(plan.args.iter().any(|a| a == "--no-launch"));
+    }
+
+    #[test]
+    fn install_wsl_needs_admin_no_distro_guard() {
+        let plan = step_plan(BootstrapStep::InstallWsl);
+        assert!(plan.needs_admin);
+        assert!(!plan.guards_distro);
+        assert!(plan.args.contains(&"--no-distribution".to_string()));
+    }
+
+    #[test]
+    fn distro_exists_is_case_insensitive_and_trims() {
+        let list = "Ubuntu-24.04\n  winbox-engine \nUbuntu-22.04\n";
+        assert!(distro_exists("winbox-engine", list));
+        assert!(distro_exists("WINBOX-ENGINE", list));
+        assert!(distro_exists("Ubuntu-24.04", list));
+        assert!(!distro_exists("winbox-engine", "Ubuntu-24.04\nDebian\n"));
+        assert!(!distro_exists("winbox-engine", ""));
     }
 
     #[test]
