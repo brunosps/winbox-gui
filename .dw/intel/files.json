@@ -1,182 +1,185 @@
 {
   "schema_version": "1.0",
-  "files": {
-    "src-tauri/src/main.rs": {
-      "purpose": "CLI entrypoint shim; dispatches GUI mode vs CLI subcommands via winbox_gui_lib::run()",
-      "exports": []
-    },
-    "src-tauri/src/lib.rs": {
-      "purpose": "Tauri command handlers; AppHandle wiring; operation progress channel emit_progress; run_blocking spawn for sync ops",
-      "exports": [
-        "run", "launch_profile", "open_web_vnc", "open_web_vnc_window",
-        "list_profiles", "get_profile_config", "install_profile", "update_profile",
-        "restart_profile", "pause_profile", "resume_profile", "stop_profile", "kill_profile",
-        "set_default_profile", "remove_profile", "get_logs", "list_supported_distros",
-        "list_bundles", "host_info", "host_health", "pick_iso_file",
-        "list_host_gpus", "gpu_setup_status", "gpu_setup_apply", "gpu_setup_revert",
-        "list_snapshots", "create_snapshot", "rollback_snapshot",
-        "reapply_bundles", "update_profile_image", "version"
-      ],
-      "key_line_refs": {
-        "launch_profile dispatcher": "src-tauri/src/lib.rs:257",
-        "open_web_vnc_window URL (autoconnect)": "src-tauri/src/lib.rs:301",
-        "Tauri handler registration": "src-tauri/src/lib.rs:641"
-      }
-    },
-    "src-tauri/src/cli.rs": {
-      "purpose": "clap-based CLI; mirrors GUI commands for headless / scripted use",
-      "exports": ["build_cli", "dispatch_cli"]
-    },
-    "src-tauri/src/commands/install.rs": {
-      "purpose": "Profile creation: validate InstallParams, write env file (chmod 600), render compose, generate OEM scripts (Windows only)",
-      "exports": ["InstallParams", "run"]
-    },
-    "src-tauri/src/commands/launch.rs": {
-      "purpose": "Container lifecycle: ensure_running (Windows/Linux dispatch), start (no-RDP), launch_rdp (xfreerdp), ensure_for_web_vnc (port for noVNC). Stale-container rm_force defensive path lives here.",
-      "exports": ["OnClose", "ensure_running", "start", "launch_rdp", "ensure_for_web_vnc", "launch"],
-      "key_line_refs": {
-        "wait_for_windows 240s log marker": "src-tauri/src/commands/launch.rs:64",
-        "wait_for_web_port 60s TCP probe": "src-tauri/src/commands/launch.rs:74",
-        "stale container rm_force (Windows path)": "src-tauri/src/commands/launch.rs:43-58",
-        "stale container rm_force (start, no-RDP)": "src-tauri/src/commands/launch.rs:90-104"
-      }
-    },
-    "src-tauri/src/commands/lifecycle.rs": {
-      "purpose": "pause/resume/stop/kill/restart/update/remove + set_default. update() pulls family-specific image from ImageFamily::docker_image()",
-      "exports": ["pause", "resume", "stop", "kill", "restart", "update", "remove", "set_default"]
-    },
-    "src-tauri/src/commands/list.rs": {
-      "purpose": "Read profiles, attach connect_mode, container state, port info; consumed by list_profiles Tauri command",
-      "exports": ["Profile", "list"]
-    },
-    "src-tauri/src/commands/logs.rs": {
-      "purpose": "Wraps docker::logs for GUI's logs modal",
-      "exports": ["get"]
-    },
-    "src-tauri/src/commands/set.rs": {
-      "purpose": "Settings update — recomputes compose.yml on config change",
-      "exports": ["UpdateParams", "run"]
-    },
-    "src-tauri/src/commands/reapply.rs": {
-      "purpose": "Regenerate OEM bundle scripts (Windows-only path)",
-      "exports": ["ReapplyResult", "run"]
-    },
-    "src-tauri/src/core/connect.rs": {
-      "purpose": "Resolves ConnectMode (Rdp / WebVnc) per profile family. Linux → WebVnc unconditionally (Phase 2 xrdp TBD)",
-      "exports": ["ConnectMode", "resolve", "resolve_for_profile"]
-    },
-    "src-tauri/src/core/compose.rs": {
-      "purpose": "Renders compose.yml templates per family (Windows / LinuxDistro / LinuxIso). Pinned to IMAGE_WINDOWS / IMAGE_QEMU from paths.rs. GPU passthrough block via build_gpu_block()",
-      "exports": ["write"],
-      "private": ["render_windows", "render_linux_distro", "render_linux_iso", "build_gpu_block", "read_iommu_group", "build_extra_ports", "yaml_double_quote"],
-      "tests": 6
-    },
-    "src-tauri/src/core/docker.rs": {
-      "purpose": "Docker CLI wrapper: container_status, compose_run (-p winbox-{profile}), logs, pause/unpause/stop/kill/rm_force/pull, check_kvm, check_daemon, require_installed",
-      "exports": ["container_status", "compose_run", "logs", "pause", "unpause", "stop", "kill", "rm_force", "pull", "logs_contains", "require_installed", "check_daemon", "check_kvm"]
-    },
-    "src-tauri/src/core/rdp.rs": {
-      "purpose": "Spawns xfreerdp3 with credentials from env file; stderr+stdout teed to ~/.cache/winbox/rdp-{profile}.log; HiDPI scale auto-detect via xrandr",
-      "exports": ["launch"]
-    },
-    "src-tauri/src/core/paths.rs": {
-      "purpose": "Path constants and XDG helpers. Image pins: IMAGE_WINDOWS=dockurr/windows:5.14, IMAGE_QEMU=qemux/qemu:7.29. Cache dir for RDP logs.",
-      "exports": [
-        "WINBOX_VERSION", "IMAGE_WINDOWS", "IMAGE_QEMU", "IMAGE", "HOST",
-        "BASE_WEB_PORT", "BASE_RDP_PORT", "BASE_SSH_PORT",
-        "config_dir", "data_dir", "cache_dir", "apps_dir", "default_file",
-        "profiles_cfg_dir", "profiles_data_dir", "bundles_user_dir", "shared_root",
-        "profile_cfg_dir", "profile_data_dir", "profile_env_file", "profile_compose_file",
-        "profile_oem_dir", "profile_storage_dir", "profile_snapshots_dir",
-        "profile_shared_dir", "profile_container", "profile_rdp_log_file"
-      ]
-    },
-    "src-tauri/src/core/env_file.rs": {
-      "purpose": "Read/write .env-style files (config.env). Permissive parser, 0o600 writer.",
-      "exports": ["EnvMap", "read", "write", "get", "get_u16"]
-    },
-    "src-tauri/src/core/image_family.rs": {
-      "purpose": "ImageFamily enum (Windows / LinuxDistro / LinuxIso) + curated SUPPORTED_DISTROS list. docker_image() returns the pinned image.",
-      "exports": ["ImageFamily", "SUPPORTED_DISTROS"]
-    },
-    "src-tauri/src/core/profile.rs": {
-      "purpose": "Profile registry: exists, resolve (active or first), list_names, get_default/set_default/clear_default, remove_tree",
-      "exports": ["exists", "resolve", "list_names", "get_default", "set_default", "clear_default", "remove_tree"]
-    },
-    "src-tauri/src/core/gpu.rs": {
-      "purpose": "Enumerate host GPUs via lspci/sysfs",
-      "exports": ["GpuInfo", "list_host_gpus"]
-    },
-    "src-tauri/src/core/gpu_bind.rs": {
-      "purpose": "Bind/unbind GPU between vendor driver and vfio-pci at the sysfs layer",
-      "exports": ["status", "bind_vfio", "rebind_vendor"]
-    },
-    "src-tauri/src/core/gpu_hooks.rs": {
-      "purpose": "Pre-start / post-stop lifecycle hooks (sets up vfio binding before container start, restores after stop)",
-      "exports": ["prepare_for_start", "cleanup_after_stop"]
-    },
-    "src-tauri/src/core/vfio_setup.rs": {
-      "purpose": "System-level VFIO bring-up (modprobe, kernel params advisory)",
-      "exports": ["setup_status", "apply", "revert"]
-    },
-    "src-tauri/src/core/snapshots.rs": {
-      "purpose": "qcow2-style snapshots via docker compose down + cp + up",
-      "exports": ["SnapshotInfo", "list", "create", "rollback", "timestamped_snapshot_name"]
-    },
-    "src-tauri/src/core/health.rs": {
-      "purpose": "Aggregated host-health diagnostics (docker daemon, KVM, FreeRDP presence). 5 unit tests.",
-      "exports": ["HealthReport", "report"]
-    },
-    "src-tauri/src/core/validation.rs": {
-      "purpose": "Input validators: profile name, BDF format, extra-port parsing, resource sizing. 4 unit tests.",
-      "exports": ["normalize_resources", "parse_extra_ports", "validate_name", "validate_bdf"]
-    },
-    "src-tauri/src/core/host.rs": {
-      "purpose": "Host metadata (CPU model, RAM, disk free) for info banner",
-      "exports": ["HostInfo", "info"]
-    },
-    "src-tauri/src/core/desktop.rs": {
-      "purpose": "Regenerate XDG .desktop launcher entries per profile",
-      "exports": ["regenerate"]
-    },
-    "src-tauri/src/core/oem.rs": {
-      "purpose": "Generate Windows OEM bundle (install.bat + firstlogon.ps1) from selected bundle set",
-      "exports": ["generate"]
-    },
-    "src-tauri/src/core/bundles.rs": {
-      "purpose": "Curated software bundles (banking-br, browsers, dev, media, office) for Windows install",
-      "exports": ["Bundle", "list"]
-    },
-    "src-tauri/src/core/ports.rs": {
-      "purpose": "Port allocation helpers (next-free for WEB / RDP / SSH per profile)",
-      "exports": ["allocate", "in_use"]
-    },
-    "src/main.js": {
-      "purpose": "Frontend SPA logic in vanilla JS. ProfileCard render, modeMeta (RDP/VNC badge), search/filter, modal handlers, Tauri invoke wrappers. ~1411 lines.",
+  "generated_at": "2026-05-28",
+  "files": [
+    {
+      "path": "src/main.js",
+      "type": "frontend-controller",
+      "purpose": "Main dashboard renderer, modal controller, Tauri IPC action dispatcher, operation progress listener, bootstrap wizard.",
       "exports": [],
-      "key_line_refs": {
-        "modeMeta": "src/main.js:122",
-        "primaryActionMeta": "src/main.js:127",
-        "cmdMap dispatch": "src/main.js:857"
-      }
+      "imports": ["src/i18n.js", "src/dom-utils.js", "src/profile-display.js", "src/locales/en-US.js", "src/locales/pt-BR.js"],
+      "notes": "Large god/controller file; highest frontend change risk."
     },
-    "src/index.html": {
-      "purpose": "Single page with header + dashboard + 6 modals (install, settings, logs, snapshots, reapply, confirm)",
-      "exports": []
+    {
+      "path": "src/dom-utils.js",
+      "type": "frontend-utility",
+      "purpose": "HTML/attribute escaping and CSS-token normalization.",
+      "exports": ["escapeHtml", "escapeAttr", "cssToken"],
+      "imports": []
     },
-    "src/styles.css": {
-      "purpose": "Hand-rolled CSS; design tokens; modal/card/badge styling",
-      "exports": []
+    {
+      "path": "src/profile-display.js",
+      "type": "frontend-utility",
+      "purpose": "Pure profile state, connection badge, and primary action metadata helpers.",
+      "exports": ["profileState", "modeMeta", "primaryActionMeta"],
+      "imports": ["src/dom-utils.js"]
     },
-    "src/i18n.js": {
-      "purpose": "Simple message catalog lookup with {{var}} interpolation; locale switcher",
-      "exports": ["t", "setLocale", "currentLocale"]
+    {
+      "path": "src/i18n.js",
+      "type": "frontend-utility",
+      "purpose": "Locale registry, translation lookup, locale persistence, and data-i18n DOM application.",
+      "exports": ["registerLocale", "getLocale", "listLocales", "setLocale", "t", "applyAll"],
+      "imports": []
     },
-    "src/dom-utils.js": {
-      "purpose": "escapeHtml, escapeAttr, cssToken — XSS-safe DOM helpers. 3 unit tests in dom-utils.test.js.",
-      "exports": ["escapeHtml", "escapeAttr", "cssToken"]
+    {
+      "path": "src/index.html",
+      "type": "frontend-markup",
+      "purpose": "Static Tauri window shell and modal markup for install, settings, logs, snapshots, reapply, confirm, remove, and bootstrap flows.",
+      "exports": [],
+      "imports": []
     },
-    "src/locales/pt-BR.js": {"purpose": "PT-BR translations", "exports": ["messages"]},
-    "src/locales/en-US.js": {"purpose": "EN-US translations", "exports": ["messages"]}
-  }
+    {
+      "path": "src/styles.css",
+      "type": "frontend-style",
+      "purpose": "Complete visual system, dashboard layout, cards/table, modals, controls, responsive rules.",
+      "exports": [],
+      "imports": []
+    },
+    {
+      "path": "src-tauri/src/lib.rs",
+      "type": "tauri-command-boundary",
+      "purpose": "Serializable DTOs, Tauri commands, operation-progress events, blocking handoff, app builder and command registration.",
+      "exports": ["run"],
+      "imports": ["src-tauri/src/commands/*", "src-tauri/src/core/*"],
+      "notes": "IPC hub; keep business logic delegated to commands/core."
+    },
+    {
+      "path": "src-tauri/src/main.rs",
+      "type": "entrypoint",
+      "purpose": "Chooses CLI mode when CLI args exist, otherwise starts the Tauri GUI.",
+      "exports": [],
+      "imports": ["src-tauri/src/cli.rs", "src-tauri/src/lib.rs"]
+    },
+    {
+      "path": "src-tauri/src/cli.rs",
+      "type": "cli-boundary",
+      "purpose": "Legacy/automation CLI parser and command dispatcher.",
+      "exports": ["run"],
+      "imports": ["src-tauri/src/commands/*", "src-tauri/src/core/*"],
+      "notes": "Large CLI hub."
+    },
+    {
+      "path": "src-tauri/src/commands/install.rs",
+      "type": "command-orchestrator",
+      "purpose": "Creates profile directories, validates install args, writes config.env, generates compose/OEM files, starts container.",
+      "exports": ["InstallParams", "run"],
+      "imports": ["src-tauri/src/core/compose.rs", "src-tauri/src/core/docker.rs", "src-tauri/src/core/profile.rs", "src-tauri/src/core/validation.rs"]
+    },
+    {
+      "path": "src-tauri/src/commands/launch.rs",
+      "type": "command-orchestrator",
+      "purpose": "Starts/unpauses/recreates containers, performs readiness polling, opens noVNC browser URL.",
+      "exports": ["OnClose", "ContainerTransition", "ensure_started", "ensure_running", "wait_for_web_port", "ensure_for_web_vnc", "launch"],
+      "imports": ["src-tauri/src/core/docker.rs", "src-tauri/src/core/env_file.rs", "src-tauri/src/core/launch_error.rs", "src-tauri/src/core/paths.rs"]
+    },
+    {
+      "path": "src-tauri/src/commands/lifecycle.rs",
+      "type": "command-orchestrator",
+      "purpose": "Pause, resume, stop, kill, restart, update image, remove profile, set default.",
+      "exports": ["pause", "resume", "stop", "kill", "restart", "update", "remove", "set_default"],
+      "imports": ["src-tauri/src/core/docker.rs", "src-tauri/src/core/gpu_hooks.rs", "src-tauri/src/core/profile.rs", "src-tauri/src/core/snapshots.rs"]
+    },
+    {
+      "path": "src-tauri/src/commands/set.rs",
+      "type": "command-orchestrator",
+      "purpose": "Updates profile env settings and rewrites compose; optionally restarts container.",
+      "exports": ["SetParams", "run"],
+      "imports": ["src-tauri/src/core/env_file.rs", "src-tauri/src/core/validation.rs", "src-tauri/src/core/compose.rs"]
+    },
+    {
+      "path": "src-tauri/src/commands/list.rs",
+      "type": "query-command",
+      "purpose": "Reads profile env files and Docker status to produce frontend profile summaries.",
+      "exports": ["ProfileSummary", "list"],
+      "imports": ["src-tauri/src/core/docker.rs", "src-tauri/src/core/env_file.rs", "src-tauri/src/core/profile.rs"]
+    },
+    {
+      "path": "src-tauri/src/core/docker.rs",
+      "type": "core-integration",
+      "purpose": "DockerClient trait, CLI Docker implementation, compose execution, pull progress parser, launch error classification, Docker mock tests.",
+      "exports": ["DockerClient", "CliDocker", "PullEvent"],
+      "imports": ["std::process::Command"]
+    },
+    {
+      "path": "src-tauri/src/core/compose.rs",
+      "type": "core-renderer",
+      "purpose": "Renders profile-local compose.yml for Windows, Linux distro, Linux ISO, extra ports, and GPU passthrough.",
+      "exports": ["write"],
+      "imports": ["src-tauri/src/core/env_file.rs", "src-tauri/src/core/image_family.rs", "src-tauri/src/core/paths.rs", "src-tauri/src/core/validation.rs"]
+    },
+    {
+      "path": "src-tauri/src/core/validation.rs",
+      "type": "core-validation",
+      "purpose": "Validates names, env values, passwords, resources, storage paths, ISO paths, bundles, snapshots, BDFs, and extra ports.",
+      "exports": ["validate_profile_name", "normalize_ram", "normalize_cpu", "normalize_disk", "validate_storage_path", "parse_extra_ports"],
+      "imports": ["std::process::Command"]
+    },
+    {
+      "path": "src-tauri/src/core/health.rs",
+      "type": "core-health",
+      "purpose": "Builds host health report for Docker, daemon, Compose, KVM, storage, profiles, ports, GPU/VFIO.",
+      "exports": ["CheckStatus", "HealthCheck", "HostHealthReport", "report", "overall_status"],
+      "imports": ["src-tauri/src/core/docker.rs", "src-tauri/src/core/profile.rs", "std::process::Command"]
+    },
+    {
+      "path": "src-tauri/src/core/bootstrap.rs",
+      "type": "core-bootstrap",
+      "purpose": "First-run WSL/Docker/image detection and explicit bootstrap step plans/actions.",
+      "exports": ["BootstrapStatus", "BootstrapStep", "StepPlan", "StepOutcome", "check_status", "run_step"],
+      "imports": ["std::process::Command"]
+    },
+    {
+      "path": "src-tauri/src/core/paths.rs",
+      "type": "core-paths",
+      "purpose": "Central image refs, localhost binding, XDG/AppData directories, profile paths and container names.",
+      "exports": ["IMAGE_WINDOWS", "IMAGE_QEMU", "HOST", "config_dir", "data_dir", "profile_env_file", "profile_compose_file", "profile_container"],
+      "imports": []
+    },
+    {
+      "path": "src-tauri/src/core/env_file.rs",
+      "type": "core-config-parser",
+      "purpose": "Simple KEY=value parser/writer for profile config.env files.",
+      "exports": ["EnvMap", "read", "parse", "set_key", "get", "get_u16"],
+      "imports": []
+    },
+    {
+      "path": "src-tauri/src/core/profile.rs",
+      "type": "core-profile",
+      "purpose": "Profile listing, default resolution, validation delegation, directory management, removal paths.",
+      "exports": ["list_names", "get_default", "set_default", "resolve", "ensure_dirs", "remove_tree"],
+      "imports": ["src-tauri/src/core/paths.rs", "src-tauri/src/core/validation.rs"]
+    },
+    {
+      "path": "src-tauri/src/core/snapshots.rs",
+      "type": "core-snapshots",
+      "purpose": "Lists, creates, and rolls back sparse-copy profile storage snapshots.",
+      "exports": ["SnapshotInfo", "list", "create", "rollback", "timestamped_snapshot_name"],
+      "imports": ["src-tauri/src/core/docker.rs", "src-tauri/src/core/paths.rs", "src-tauri/src/core/validation.rs"]
+    },
+    {
+      "path": "tests/e2e/wdio.conf.mjs",
+      "type": "e2e-config",
+      "purpose": "Starts tauri-driver and configures WebdriverIO against the debug Tauri binary with isolated XDG homes.",
+      "exports": ["config"],
+      "imports": ["node:url", "node:path", "node:child_process"]
+    },
+    {
+      "path": "tests/e2e/specs/smoke.spec.mjs",
+      "type": "e2e-test",
+      "purpose": "Smoke checks Tauri app boot, brand label, new profile button, and dashboard content.",
+      "exports": [],
+      "imports": ["expect-webdriverio"],
+      "notes": "Selectors for profile/empty state appear stale."
+    }
+  ]
 }
