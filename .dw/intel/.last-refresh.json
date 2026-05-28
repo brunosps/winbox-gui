@@ -1,8 +1,0 @@
-{
-  "updated_at": "2026-05-28T00:00:00-03:00",
-  "version": "1.0",
-  "mode": "full",
-  "files_scanned": 49,
-  "bugfixes_indexed": 0,
-  "source": "/dw-analyze-project -> /dw-intel --build"
-}
