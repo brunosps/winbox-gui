@@ -227,11 +227,9 @@ impl DockerClient for CliDocker {
             }
         }
 
-        let status = child
-            .wait()
-            .map_err(|e| LaunchError::Other {
-                message: format!("docker pull wait: {e}"),
-            })?;
+        let status = child.wait().map_err(|e| LaunchError::Other {
+            message: format!("docker pull wait: {e}"),
+        })?;
         if status.success() {
             return Ok(());
         }
@@ -454,9 +452,8 @@ fn parse_progress_bytes(s: &str) -> (Option<u64>, Option<u64>) {
             .next_back()
             .and_then(parse_size_token)
     };
-    let first_token = |chunk: &str| -> Option<u64> {
-        chunk.split_whitespace().next().and_then(parse_size_token)
-    };
+    let first_token =
+        |chunk: &str| -> Option<u64> { chunk.split_whitespace().next().and_then(parse_size_token) };
     (last_token(before), first_token(after))
 }
 
@@ -503,7 +500,8 @@ fn extract_diskfull_path(stderr: &str) -> Option<String> {
             continue;
         }
         for token in line.split_whitespace() {
-            let candidate = token.trim_matches(|c: char| c == ',' || c == ':' || c == '"' || c == '\'');
+            let candidate =
+                token.trim_matches(|c: char| c == ',' || c == ':' || c == '"' || c == '\'');
             if candidate.starts_with('/') && candidate.len() > 1 {
                 return Some(candidate.to_string());
             }
@@ -836,7 +834,8 @@ mod tests {
 
     #[test]
     fn classify_recognizes_docker_desktop_wsl_integration_off() {
-        let stderr = "error during connect: WSL integration is not enabled for distribution 'Ubuntu-24.04'.";
+        let stderr =
+            "error during connect: WSL integration is not enabled for distribution 'Ubuntu-24.04'.";
         match classify_compose_stderr(stderr) {
             LaunchError::DockerDesktopWslIntegrationOff { distro } => {
                 assert_eq!(distro, "Ubuntu-24.04")
@@ -870,10 +869,7 @@ mod tests {
     #[test]
     fn extract_wsl_distro_handles_quoted_forms() {
         let line = "Docker Desktop is not running, wsl-distro 'docker-desktop' missing";
-        assert_eq!(
-            extract_wsl_distro(line).as_deref(),
-            Some("docker-desktop")
-        );
+        assert_eq!(extract_wsl_distro(line).as_deref(), Some("docker-desktop"));
     }
 
     #[test]
@@ -924,7 +920,10 @@ mod tests {
     #[test]
     fn parse_size_token_handles_si_and_iec() {
         assert_eq!(parse_size_token("12.3MB"), Some(12_300_000));
-        assert_eq!(parse_size_token("12.3MiB"), Some((12.3 * 1_048_576.0) as u64));
+        assert_eq!(
+            parse_size_token("12.3MiB"),
+            Some((12.3 * 1_048_576.0) as u64)
+        );
         assert_eq!(parse_size_token("1.5GB"), Some(1_500_000_000));
         assert_eq!(parse_size_token("1.5GiB"), Some(1_610_612_736));
         assert_eq!(parse_size_token("456B"), Some(456));

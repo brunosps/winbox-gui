@@ -36,14 +36,18 @@ pub struct Profile {
     pub status: String,
     pub web_port: u16,
     pub rdp_port: u16,
+    pub ssh_port: u16,
     pub ram: String,
     pub bundles: String,
+    pub shared_dir: String,
     pub is_default: bool,
     pub image_family: ImageFamily,
     pub connect_mode: ConnectMode,
     /// For Linux distro profiles, the BOOT keyword (ubuntu, fedora, …).
     /// Empty for Windows or LinuxIso profiles.
     pub boot: String,
+    /// For LinuxCloud profiles, the cloud-init bootstrap profile.
+    pub cloud_init_profile: String,
     /// For Linux ISO profiles, absolute host path of the mounted ISO.
     pub iso_path: String,
 }
@@ -54,6 +58,7 @@ pub struct ProfileConfig {
     pub image_family: ImageFamily,
     pub version: String,
     pub boot: String,
+    pub cloud_init_profile: String,
     pub iso_path: String,
     pub ram: String,
     pub cpu: String,
@@ -221,12 +226,15 @@ fn list_profiles() -> Result<Vec<Profile>, String> {
             status: p.status,
             web_port: p.web_port,
             rdp_port: p.rdp_port,
+            ssh_port: p.ssh_port,
             ram: p.ram,
             bundles: p.bundles,
+            shared_dir: p.shared_dir,
             is_default: p.is_default,
             image_family: p.image_family,
             connect_mode: p.connect_mode,
             boot: p.boot,
+            cloud_init_profile: p.cloud_init_profile,
             iso_path: p.iso_path,
         })
         .collect())
@@ -267,12 +275,18 @@ async fn bootstrap_run_step(
     force: bool,
 ) -> Result<crate::core::bootstrap::StepOutcome, String> {
     let plan = crate::core::bootstrap::step_plan(step);
-    emit_progress(&app, "bootstrap", "bootstrap", "running", "running", &plan.description);
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        crate::core::bootstrap::run_step(step, force)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    emit_progress(
+        &app,
+        "bootstrap",
+        "bootstrap",
+        "running",
+        "running",
+        &plan.description,
+    );
+    let outcome =
+        tauri::async_runtime::spawn_blocking(move || crate::core::bootstrap::run_step(step, force))
+            .await
+            .map_err(|e| e.to_string())?;
     Ok(outcome)
 }
 
@@ -294,7 +308,6 @@ async fn launch_profile(
     let mode = connect::resolve_for_profile(&p);
     let profile_name = p.clone();
     let profile_for_error = profile_name.clone();
-    let app_clone = app.clone();
     emit_progress(
         &app,
         &profile_name,
@@ -334,18 +347,19 @@ async fn launch_profile(
                 .map_err(|e| LaunchError::Other {
                     message: format!("falha lendo env: {e:#}"),
                 })?;
-            let web_port = crate::core::env_file::get_u16(&env, "WEB_PORT");
+            let viewer_port = connect::viewer_port(&env);
+            let viewer_url = connect::viewer_url(&env).ok_or_else(|| LaunchError::Other {
+                message: format!("WEB_PORT não definido para '{profile_name}'"),
+            })?;
 
-            if needs_wait {
+            if needs_wait || !cmd_launch::web_port_reachable(viewer_port) {
                 emit("wait_vnc", "Aguardando QEMU + noVNC responder...");
-                cmd_launch::wait_for_web_port(&profile_name, web_port)?;
+                cmd_launch::wait_for_web_port(&profile_name, viewer_port)?;
             }
 
             emit("launching", "Abrindo viewer noVNC no navegador...");
-            open_web_vnc_window(&app_clone, &profile_name, web_port).map_err(|e| {
-                LaunchError::Other {
-                    message: format!("{e:#}"),
-                }
+            open_web_vnc_url(&profile_name, &viewer_url).map_err(|e| LaunchError::Other {
+                message: format!("{e:#}"),
             })?;
 
             Ok(OperationResult {
@@ -386,8 +400,8 @@ async fn launch_profile(
     result
 }
 
-fn open_web_vnc_window(_app: &AppHandle, profile_name: &str, port: u16) -> anyhow::Result<()> {
-    if port == 0 {
+fn open_web_vnc_url(profile_name: &str, url: &str) -> anyhow::Result<()> {
+    if url.trim().is_empty() {
         anyhow::bail!("WEB_PORT inválida para perfil '{}'", profile_name);
     }
     // We previously launched noVNC inside a Tauri WebView, but WebKitGTK 4.1
@@ -395,12 +409,7 @@ fn open_web_vnc_window(_app: &AppHandle, profile_name: &str, port: u16) -> anyho
     // (the frame renders fine, input is dropped at the WM layer). Use the
     // user's default browser instead — it gets clipboard, full-screen, and
     // input forwarding for free, which matches the legacy CLI behavior.
-    let url = format!(
-        "http://{}:{}/?autoconnect=true&resize=scale",
-        paths::HOST,
-        port
-    );
-    crate::core::opener::open_url(&url)
+    crate::core::opener::open_url(url)
         .map_err(|e| anyhow::anyhow!("falha ao abrir noVNC ({url}): {e:#}"))?;
     Ok(())
 }
@@ -439,8 +448,10 @@ async fn pick_storage_dir(app: AppHandle) -> Result<Option<String>, String> {
 fn open_web_vnc(app: AppHandle, name: String) -> Result<(), String> {
     let p = profile::resolve(Some(&name)).map_err(|e| e.to_string())?;
     let map = env_file::read(&paths::profile_env_file(&p)).map_err(|e| e.to_string())?;
-    let port = env_file::get_u16(&map, "WEB_PORT");
-    open_web_vnc_window(&app, &p, port).map_err(|e| format!("{e:#}"))
+    let url =
+        connect::viewer_url(&map).ok_or_else(|| format!("WEB_PORT não definido para '{p}'"))?;
+    let _ = app;
+    open_web_vnc_url(&p, &url).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -645,6 +656,7 @@ fn get_profile_config(name: String) -> Result<ProfileConfig, String> {
         image_family: ImageFamily::from_env_map(&map),
         version: env_file::get(&map, "VERSION").to_string(),
         boot: env_file::get(&map, "BOOT").to_string(),
+        cloud_init_profile: env_file::get(&map, "CLOUD_INIT_PROFILE").to_string(),
         iso_path: env_file::get(&map, "ISO_PATH").to_string(),
         ram: env_file::get(&map, "RAM_SIZE").to_string(),
         cpu: env_file::get(&map, "CPU_CORES").to_string(),

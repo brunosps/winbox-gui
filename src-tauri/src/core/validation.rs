@@ -127,10 +127,7 @@ pub struct StoragePathCheck {
 /// * Directory is created if missing (parent must exist + be writable).
 /// * Write permission is probed with a tiny temp file.
 /// * Free space must be at least `disk_size_env` (e.g. `"128G"`).
-pub fn validate_storage_path(
-    value: &str,
-    disk_size_env: &str,
-) -> Result<Option<StoragePathCheck>> {
+pub fn validate_storage_path(value: &str, disk_size_env: &str) -> Result<Option<StoragePathCheck>> {
     let v = value.trim();
     if v.is_empty() {
         return Ok(None);
@@ -164,17 +161,14 @@ pub fn validate_storage_path(
     }
 
     let probe = path.join(".winbox-write-test");
-    std::fs::write(&probe, b"ok")
-        .with_context(|| format!("Sem permissão de escrita em '{v}'"))?;
+    std::fs::write(&probe, b"ok").with_context(|| format!("Sem permissão de escrita em '{v}'"))?;
     let _ = std::fs::remove_file(&probe);
 
     if let Some(free_bytes) = query_free_bytes(path) {
         let need_bytes: u64 = (need_gib as u64) * 1024 * 1024 * 1024;
         if free_bytes < need_bytes {
             let free_gib = free_bytes / (1024 * 1024 * 1024);
-            bail!(
-                "Espaço insuficiente em '{v}': preciso de {need_gib}G, disponível {free_gib}G."
-            );
+            bail!("Espaço insuficiente em '{v}': preciso de {need_gib}G, disponível {free_gib}G.");
         }
     }
 
@@ -398,10 +392,7 @@ mod tests {
 
     #[test]
     fn storage_path_creates_missing_dir() {
-        let tmp = std::env::temp_dir().join(format!(
-            "winbox-test-storage-{}",
-            std::process::id()
-        ));
+        let tmp = std::env::temp_dir().join(format!("winbox-test-storage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let out = validate_storage_path(tmp.to_str().unwrap(), "1G").unwrap();
         assert!(out.is_some(), "expected Some(check), got {out:?}");
@@ -426,6 +417,9 @@ mod tests {
         // non-existent /mnt/e path still errors deterministically.
         let err = validate_storage_path("/mnt/e/winbox", "128G").unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("drvfs"), "expected drvfs rejection, got: {msg}");
+        assert!(
+            msg.contains("drvfs"),
+            "expected drvfs rejection, got: {msg}"
+        );
     }
 }

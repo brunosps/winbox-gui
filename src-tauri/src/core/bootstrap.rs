@@ -2,10 +2,10 @@
 //!
 //! The native Windows app still needs a Linux VM engine underneath: WSL2
 //! + a distro running Docker + the dockurr image. This module figures out
-//! **what's missing** so the UI can guide the user (or, eventually, run
-//! the fix steps). Everything here is read-only — the actual install
-//! actions (wsl --install, docker pull) live behind explicit user-driven
-//! commands and are NEVER triggered by detection.
+//!   **what's missing** so the UI can guide the user (or, eventually, run
+//!   the fix steps). Everything here is read-only — the actual install
+//!   actions (wsl --install, docker pull) live behind explicit user-driven
+//!   commands and are NEVER triggered by detection.
 //!
 //! Parsers are pure (no I/O) so they're unit-tested on any platform; the
 //! `check_status` orchestrator shells out to read-only probes.
@@ -82,9 +82,7 @@ pub fn parse_docker_available(version_output: &str) -> bool {
 
 /// Is `image` listed in `docker images` output?
 pub fn parse_image_present(images_output: &str, image_repo: &str) -> bool {
-    images_output
-        .lines()
-        .any(|l| l.contains(image_repo))
+    images_output.lines().any(|l| l.contains(image_repo))
 }
 
 /// Decide the overall bootstrap status from gathered probes. Pure.
@@ -94,7 +92,11 @@ pub fn evaluate(p: &Probes) -> BootstrapStatus {
     checks.push(BootstrapCheck {
         id: "wsl2".into(),
         label: "WSL2".into(),
-        state: if p.wsl_installed { StepState::Ok } else { StepState::Missing },
+        state: if p.wsl_installed {
+            StepState::Ok
+        } else {
+            StepState::Missing
+        },
         detail: if p.wsl_installed {
             "WSL2 disponível.".into()
         } else {
@@ -107,7 +109,11 @@ pub fn evaluate(p: &Probes) -> BootstrapStatus {
     checks.push(BootstrapCheck {
         id: "distro".into(),
         label: "Distro Linux".into(),
-        state: if distro_ok { StepState::Ok } else { StepState::Missing },
+        state: if distro_ok {
+            StepState::Ok
+        } else {
+            StepState::Missing
+        },
         detail: match &p.running_distro {
             Some(d) => format!("Distro '{d}' rodando."),
             None => "Nenhuma distro WSL rodando.".into(),
@@ -118,7 +124,11 @@ pub fn evaluate(p: &Probes) -> BootstrapStatus {
     checks.push(BootstrapCheck {
         id: "docker".into(),
         label: "Docker".into(),
-        state: if p.docker_available { StepState::Ok } else { StepState::Missing },
+        state: if p.docker_available {
+            StepState::Ok
+        } else {
+            StepState::Missing
+        },
         detail: if p.docker_available {
             "Docker daemon acessível.".into()
         } else {
@@ -130,7 +140,11 @@ pub fn evaluate(p: &Probes) -> BootstrapStatus {
     checks.push(BootstrapCheck {
         id: "image".into(),
         label: "Imagem dockurr".into(),
-        state: if p.image_present { StepState::Ok } else { StepState::Missing },
+        state: if p.image_present {
+            StepState::Ok
+        } else {
+            StepState::Missing
+        },
         detail: if p.image_present {
             "Imagem dockurr/windows presente.".into()
         } else {
@@ -340,9 +354,7 @@ pub fn run_step(step: BootstrapStep, force: bool) -> StepOutcome {
         }
     }
 
-    let status = Command::new(&plan.program)
-        .args(&plan.args)
-        .status();
+    let status = Command::new(&plan.program).args(&plan.args).status();
     match status {
         Ok(s) if s.success() => StepOutcome::Done {
             message: plan.description.clone(),
@@ -369,7 +381,9 @@ mod tests {
 
     #[test]
     fn detects_wsl2_from_status() {
-        assert!(parse_wsl_installed("Default Version: 2\nWSL version: 2.6.1.0"));
+        assert!(parse_wsl_installed(
+            "Default Version: 2\nWSL version: 2.6.1.0"
+        ));
         assert!(parse_wsl_installed("Versão do WSL: 2.6.1.0"));
         assert!(parse_wsl_installed("Default Version: 2"));
         assert!(!parse_wsl_installed("command not found"));
@@ -390,12 +404,17 @@ mod tests {
     fn docker_available_needs_server() {
         assert!(parse_docker_available("Client: ...\nServer: Docker Engine"));
         assert!(parse_docker_available("Server Version: 29.1.3"));
-        assert!(!parse_docker_available("Cannot connect to the Docker daemon"));
+        assert!(!parse_docker_available(
+            "Cannot connect to the Docker daemon"
+        ));
     }
 
     #[test]
     fn image_present_matches_repo() {
-        assert!(parse_image_present("dockurr/windows\nubuntu\n", "dockurr/windows"));
+        assert!(parse_image_present(
+            "dockurr/windows\nubuntu\n",
+            "dockurr/windows"
+        ));
         assert!(!parse_image_present("ubuntu\nalpine\n", "dockurr/windows"));
     }
 

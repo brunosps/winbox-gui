@@ -15,10 +15,10 @@
 //! `install`/`uninstall` functions live behind `cfg(target_os = "windows")`
 //! and shell out to `wsl.exe` and `schtasks.exe`.
 
-use anyhow::{anyhow, Result};
-use serde::Serialize;
 #[cfg(target_os = "windows")]
 use anyhow::Context;
+use anyhow::{anyhow, Result};
+use serde::Serialize;
 #[cfg(target_os = "windows")]
 use std::io::Write;
 #[cfg(target_os = "windows")]
@@ -203,7 +203,15 @@ pub fn is_managed(existing: &str) -> bool {
 pub fn install(plan: &WslAutostartPlan) -> Result<()> {
     // 1. Read /etc/wsl.conf inside the target distro, patch it, write back.
     let read = Command::new("wsl.exe")
-        .args(["-d", &plan.distro, "-u", "root", "--", "cat", "/etc/wsl.conf"])
+        .args([
+            "-d",
+            &plan.distro,
+            "-u",
+            "root",
+            "--",
+            "cat",
+            "/etc/wsl.conf",
+        ])
         .output()
         .context("failed to read /etc/wsl.conf via wsl.exe")?;
     let existing = if read.status.success() {
@@ -216,8 +224,7 @@ pub fn install(plan: &WslAutostartPlan) -> Result<()> {
 
     // tee the new body into /etc/wsl.conf as root via stdin to avoid
     // any shell-quoting trouble with the multi-line content.
-    write_wsl_conf(&plan.distro, &new_body)
-        .context("failed to write /etc/wsl.conf")?;
+    write_wsl_conf(&plan.distro, &new_body).context("failed to write /etc/wsl.conf")?;
 
     // 2. Drop the scheduled-task XML to a temp file, then register it.
     let xml = render_scheduled_task_xml(plan);
@@ -252,7 +259,15 @@ pub fn uninstall(plan: &WslAutostartPlan) -> Result<()> {
 
     // Re-render wsl.conf with empty services to strip our boot command.
     let read = Command::new("wsl.exe")
-        .args(["-d", &plan.distro, "-u", "root", "--", "cat", "/etc/wsl.conf"])
+        .args([
+            "-d",
+            &plan.distro,
+            "-u",
+            "root",
+            "--",
+            "cat",
+            "/etc/wsl.conf",
+        ])
         .output()
         .context("failed to read /etc/wsl.conf")?;
     let existing = if read.status.success() {
@@ -262,8 +277,7 @@ pub fn uninstall(plan: &WslAutostartPlan) -> Result<()> {
     };
 
     let stripped = strip_managed_block(&existing);
-    write_wsl_conf(&plan.distro, &stripped)
-        .context("failed to rewrite /etc/wsl.conf")?;
+    write_wsl_conf(&plan.distro, &stripped).context("failed to rewrite /etc/wsl.conf")?;
     Ok(())
 }
 
@@ -273,9 +287,7 @@ pub fn uninstall(plan: &WslAutostartPlan) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn write_wsl_conf(distro: &str, body: &str) -> Result<()> {
     let mut child = Command::new("wsl.exe")
-        .args([
-            "-d", distro, "-u", "root", "--", "tee", "/etc/wsl.conf",
-        ])
+        .args(["-d", distro, "-u", "root", "--", "tee", "/etc/wsl.conf"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -297,12 +309,16 @@ fn write_wsl_conf(distro: &str, body: &str) -> Result<()> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn install(_plan: &WslAutostartPlan) -> Result<()> {
-    Err(anyhow!("wsl_autostart::install is only available on Windows"))
+    Err(anyhow!(
+        "wsl_autostart::install is only available on Windows"
+    ))
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn uninstall(_plan: &WslAutostartPlan) -> Result<()> {
-    Err(anyhow!("wsl_autostart::uninstall is only available on Windows"))
+    Err(anyhow!(
+        "wsl_autostart::uninstall is only available on Windows"
+    ))
 }
 
 /// Remove the `command = ...` line we own (identified by the marker)
@@ -363,10 +379,7 @@ mod tests {
     #[test]
     fn render_boot_command_joins_services() {
         let p = plan();
-        assert_eq!(
-            render_boot_command(&p),
-            "systemctl start docker mint-vm"
-        );
+        assert_eq!(render_boot_command(&p), "systemctl start docker mint-vm");
     }
 
     #[test]
@@ -400,7 +413,11 @@ mod tests {
     fn render_wsl_conf_replaces_existing_boot_command() {
         let existing = "[boot]\ncommand = systemctl start docker\n";
         let body = render_wsl_conf(existing, &plan());
-        assert_eq!(body.matches("command").count(), 1, "should not duplicate command lines");
+        assert_eq!(
+            body.matches("command").count(),
+            1,
+            "should not duplicate command lines"
+        );
         assert!(body.contains("command = systemctl start docker mint-vm"));
         assert!(body.contains(CONF_MARKER));
     }
@@ -421,10 +438,8 @@ mod tests {
 
     #[test]
     fn strip_managed_block_removes_our_command_only() {
-        let with_managed = render_wsl_conf(
-            "[user]\ndefault=bruno\n\n[boot]\nsystemd=true\n",
-            &plan(),
-        );
+        let with_managed =
+            render_wsl_conf("[user]\ndefault=bruno\n\n[boot]\nsystemd=true\n", &plan());
         let stripped = strip_managed_block(&with_managed);
         assert!(!stripped.contains(CONF_MARKER));
         assert!(!stripped.contains("systemctl start docker mint-vm"));

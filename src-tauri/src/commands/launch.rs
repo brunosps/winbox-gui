@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::core::docker::{self, CliDocker, DockerClient};
 use crate::core::image_family::ImageFamily;
 use crate::core::launch_error::LaunchError;
-use crate::core::{env_file, gpu_hooks, paths};
+use crate::core::{connect, env_file, gpu_hooks, paths};
 
 #[derive(Clone, Copy, Debug)]
 pub enum OnClose {
@@ -120,8 +120,8 @@ fn wait_for_ready<D: DockerClient>(
     let family = ImageFamily::from_env_map(&map);
     match family {
         ImageFamily::Windows => wait_for_windows(profile, container, docker),
-        ImageFamily::LinuxDistro | ImageFamily::LinuxIso => {
-            let port = env_file::get_u16(&map, "WEB_PORT");
+        ImageFamily::LinuxDistro | ImageFamily::LinuxIso | ImageFamily::LinuxCloud => {
+            let port = connect::viewer_port(&map);
             wait_for_web_port(profile, port)
         }
     }
@@ -149,14 +149,14 @@ pub(crate) fn wait_for_web_port(profile: &str, port: u16) -> std::result::Result
             message: format!("WEB_PORT não definido para '{profile}'"),
         });
     }
-    let addr: SocketAddr =
+    let _addr: SocketAddr =
         format!("{}:{}", paths::HOST, port)
             .parse()
             .map_err(|e| LaunchError::Other {
                 message: format!("endereço inválido {}:{} — {e}", paths::HOST, port),
             })?;
     for _ in 0..LINUX_POLL_ITERS {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+        if web_port_reachable(port) {
             return Ok(());
         }
         sleep(LINUX_POLL_INTERVAL);
@@ -165,6 +165,16 @@ pub(crate) fn wait_for_web_port(profile: &str, port: u16) -> std::result::Result
         profile: profile.to_string(),
         port,
     })
+}
+
+pub(crate) fn web_port_reachable(port: u16) -> bool {
+    if port == 0 {
+        return false;
+    }
+    let Ok(addr) = format!("{}:{}", paths::HOST, port).parse::<SocketAddr>() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
 /// Only starts the container (no RDP). Same defensive logic as
@@ -197,7 +207,7 @@ pub fn start<D: DockerClient>(profile: &str, docker: &D) -> std::result::Result<
     }
 }
 
-/// Ensure container is running and return the host-forwarded `WEB_PORT`
+/// Ensure container is running and return the host-forwarded viewer port
 /// for the profile's noVNC viewer. Used by both the GUI `launch_profile`
 /// command and the legacy CLI shim — all profiles (Windows and Linux)
 /// converge on this path now that we no longer ship an RDP client.
@@ -213,15 +223,22 @@ pub fn ensure_for_web_vnc<D: DockerClient>(
         env_file::read(&paths::profile_env_file(profile)).map_err(|e| LaunchError::Other {
             message: format!("falha lendo env: {e:#}"),
         })?;
-    Ok(env_file::get_u16(&map, "WEB_PORT"))
+    let port = connect::viewer_port(&map);
+    if !web_port_reachable(port) {
+        wait_for_web_port(profile, port)?;
+    }
+    Ok(port)
 }
 
 /// Backward-compat shim used by the legacy CLI `launch` subcommand.
 /// All profiles now open in the browser via noVNC.
 pub fn launch(profile: &str, on_close: OnClose) -> Result<()> {
     let docker = CliDocker;
-    let port = ensure_for_web_vnc(profile, &docker).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let _ = crate::core::opener::open_url(&format!("http://{}:{}", paths::HOST, port));
+    ensure_for_web_vnc(profile, &docker).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let map = env_file::read(&paths::profile_env_file(profile))?;
+    if let Some(url) = connect::viewer_url(&map) {
+        let _ = crate::core::opener::open_url(&url);
+    }
     let _ = on_close;
     Ok(())
 }

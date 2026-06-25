@@ -9,6 +9,7 @@ pub enum ImageFamily {
     Windows,
     LinuxDistro,
     LinuxIso,
+    LinuxCloud,
 }
 
 impl ImageFamily {
@@ -17,6 +18,7 @@ impl ImageFamily {
             ImageFamily::Windows => "windows",
             ImageFamily::LinuxDistro => "linux_distro",
             ImageFamily::LinuxIso => "linux_iso",
+            ImageFamily::LinuxCloud => "linux_cloud",
         }
     }
 
@@ -24,6 +26,7 @@ impl ImageFamily {
         match s.trim() {
             "linux_distro" | "linux-distro" | "linux" => ImageFamily::LinuxDistro,
             "linux_iso" | "linux-iso" | "iso" => ImageFamily::LinuxIso,
+            "linux_cloud" | "linux-cloud" | "cloud" => ImageFamily::LinuxCloud,
             _ => ImageFamily::Windows,
         }
     }
@@ -33,18 +36,23 @@ impl ImageFamily {
     }
 
     pub fn is_linux(self) -> bool {
-        matches!(self, ImageFamily::LinuxDistro | ImageFamily::LinuxIso)
+        matches!(
+            self,
+            ImageFamily::LinuxDistro | ImageFamily::LinuxIso | ImageFamily::LinuxCloud
+        )
     }
 
     pub fn docker_image(self) -> &'static str {
         match self {
             ImageFamily::Windows => paths::IMAGE_WINDOWS,
-            ImageFamily::LinuxDistro | ImageFamily::LinuxIso => paths::IMAGE_QEMU,
+            ImageFamily::LinuxDistro | ImageFamily::LinuxIso | ImageFamily::LinuxCloud => {
+                paths::IMAGE_QEMU
+            }
         }
     }
 }
 
-/// Curated 24 distros recognized by qemus/qemu's BOOT keyword resolver.
+/// Curated distros recognized by qemux/qemu's BOOT keyword resolver.
 /// Used by the GUI wizard dropdown and validated server-side.
 pub const SUPPORTED_DISTROS: &[(&str, &str)] = &[
     ("ubuntu", "Ubuntu Desktop"),
@@ -70,3 +78,23 @@ pub const SUPPORTED_DISTROS: &[(&str, &str)] = &[
     ("zorin", "Zorin OS"),
     ("tails", "Tails"),
 ];
+
+pub fn is_supported_distro_boot(boot: &str) -> bool {
+    let normalized = boot.trim().to_ascii_lowercase();
+    if normalized.starts_with("http://") || normalized.starts_with("https://") {
+        return true;
+    }
+    SUPPORTED_DISTROS.iter().any(|(id, _)| *id == normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_distros_match_qemux_boot_keywords() {
+        assert!(is_supported_distro_boot("ubuntu-server"));
+        assert!(is_supported_distro_boot("xubuntu"));
+        assert!(!is_supported_distro_boot("lubuntu"));
+    }
+}

@@ -3,6 +3,7 @@ use std::net::{TcpListener, UdpSocket};
 
 use super::env_file;
 use super::paths;
+use super::validation;
 
 /// A (web, rdp, ssh) tuple reserved for a new profile.
 pub type Trio = (u16, u16, u16);
@@ -21,11 +22,16 @@ fn used_ports() -> Vec<u16> {
                 continue;
             }
             if let Ok(map) = env_file::read(&env) {
-                for k in ["WEB_PORT", "RDP_PORT", "SSH_PORT"] {
+                for k in ["WEB_PORT", "DESKTOP_WEB_PORT", "RDP_PORT", "SSH_PORT"] {
                     let v = env_file::get_u16(&map, k);
                     if v != 0 {
                         used.push(v);
                     }
+                }
+                if let Ok(extra_ports) =
+                    validation::parse_extra_ports(env_file::get(&map, "EXTRA_PORTS"))
+                {
+                    used.extend(extra_ports.into_iter().map(|port| port.host));
                 }
             }
         }
@@ -54,4 +60,13 @@ pub fn allocate() -> Result<Trio> {
     }
 
     Ok((web, rdp, ssh))
+}
+
+pub fn allocate_extra(start: u16, reserved: &[u16]) -> Result<u16> {
+    let used = used_ports();
+    let mut port = start;
+    while used.contains(&port) || reserved.contains(&port) || !port_free(port) {
+        port += 1;
+    }
+    Ok(port)
 }

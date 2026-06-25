@@ -41,3 +41,59 @@ pub fn resolve_for_profile(profile: &str) -> ConnectMode {
     let _ = env_file::read(&paths::profile_env_file(profile));
     ConnectMode::WebVnc
 }
+
+pub fn viewer_port(map: &env_file::EnvMap) -> u16 {
+    let desktop_port = env_file::get_u16(map, "DESKTOP_WEB_PORT");
+    if desktop_port != 0 {
+        desktop_port
+    } else {
+        env_file::get_u16(map, "WEB_PORT")
+    }
+}
+
+pub fn viewer_url(map: &env_file::EnvMap) -> Option<String> {
+    let desktop_port = env_file::get_u16(map, "DESKTOP_WEB_PORT");
+    if desktop_port != 0 {
+        return Some(format!(
+            "http://{}:{}/vnc.html?autoconnect=true&resize=scale",
+            paths::HOST,
+            desktop_port
+        ));
+    }
+
+    let port = env_file::get_u16(map, "WEB_PORT");
+    if port == 0 {
+        return None;
+    }
+    Some(format!(
+        "http://{}:{}/?autoconnect=true&resize=scale",
+        paths::HOST,
+        port
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_viewer_prefers_guest_novnc_port() {
+        let map =
+            env_file::parse("WEB_PORT=8007\nDESKTOP_WEB_PORT=8017\nRDP_PORT=3390\nSSH_PORT=2223\n");
+        assert_eq!(viewer_port(&map), 8017);
+        assert_eq!(
+            viewer_url(&map).as_deref(),
+            Some("http://127.0.0.1:8017/vnc.html?autoconnect=true&resize=scale")
+        );
+    }
+
+    #[test]
+    fn qemu_viewer_falls_back_to_web_port() {
+        let map = env_file::parse("WEB_PORT=8007\nRDP_PORT=3390\nSSH_PORT=2223\n");
+        assert_eq!(viewer_port(&map), 8007);
+        assert_eq!(
+            viewer_url(&map).as_deref(),
+            Some("http://127.0.0.1:8007/?autoconnect=true&resize=scale")
+        );
+    }
+}

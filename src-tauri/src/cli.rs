@@ -1,15 +1,20 @@
 use anyhow::{anyhow, bail, Result};
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Confirm, Input, Password};
+use serde::Serialize;
+use serde_json::{json, Value};
 
 use crate::commands::{
     install as cmd_install, launch as cmd_launch, lifecycle, logs, set as cmd_set,
 };
-use crate::core::{bundles, env_file, host, paths, profile, snapshots};
+use crate::core::{bundles, connect, env_file, host, paths, profile, snapshots};
 
 #[derive(Parser, Debug)]
 #[command(name = "winbox", version = paths::WINBOX_VERSION, about = "Gerenciador de VMs Windows (dockur/windows)", disable_help_subcommand = true)]
 struct Cli {
+    /// Emit machine-readable JSON. Human output remains the default.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -17,6 +22,23 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 enum Cmd {
+    /// Mostra versão e metadata do provider
+    Version,
+
+    /// Lista distros suportadas para perfis Linux
+    Distros,
+
+    /// Diagnóstico operacional do host
+    #[command(name = "host-health")]
+    HostHealth,
+
+    /// Dados de um perfil
+    Profile { profile: String },
+
+    /// URL do viewer noVNC para um perfil
+    #[command(name = "viewer-url")]
+    ViewerUrl { profile: String },
+
     /// Cria um novo perfil e baixa Windows + aplica bundles
     Install(InstallArgs),
 
@@ -26,7 +48,11 @@ enum Cmd {
 
     /// Sobe a VM em background (sem RDP)
     #[command(alias = "up")]
-    Start { profile: Option<String> },
+    Start {
+        profile: Option<String>,
+        #[arg(long)]
+        progress: Option<String>,
+    },
 
     /// docker stop com ACPI
     Stop { profile: Option<String> },
@@ -93,6 +119,8 @@ enum Cmd {
         profile: String,
         #[arg(long, short = 'y')]
         yes: bool,
+        #[arg(long = "delete-storage", default_value_t = true)]
+        delete_storage: bool,
     },
 
     /// Bundles (list, show)
@@ -155,6 +183,22 @@ struct InstallArgs {
     /// You still need to run `winbox gpu-setup --bdf <BDF>` once and reboot.
     #[arg(long)]
     gpu: Option<String>,
+    /// Image family for non-interactive install: windows | linux_distro | linux_iso | linux_cloud.
+    #[arg(long = "family", alias = "image-family", alias = "image_family")]
+    family: Option<String>,
+    /// BOOT keyword for linux_distro, or cloud-init profile for linux_cloud
+    /// (server | xubuntu-desktop).
+    #[arg(long)]
+    boot: Option<String>,
+    /// Absolute ISO path for linux_iso profiles.
+    #[arg(long = "iso-path", alias = "iso_path")]
+    iso_path: Option<String>,
+    /// Optional custom storage path.
+    #[arg(long = "storage-path", alias = "storage_path")]
+    storage_path: Option<String>,
+    /// Progress format for machine consumers: jsonl.
+    #[arg(long)]
+    progress: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -164,6 +208,8 @@ struct LaunchArgs {
     on_close: String,
     #[arg(long = "keep-alive", short = 'k')]
     keep_alive: bool,
+    #[arg(long)]
+    progress: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -203,13 +249,28 @@ enum BundlesCmd {
 /// Run the CLI. Returns exit code.
 pub fn run() -> i32 {
     match Cli::try_parse() {
-        Ok(cli) => match dispatch(cli.cmd) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("✗ {}", e);
-                1
+        Ok(cli) => {
+            if cli.json {
+                match dispatch_json(cli.cmd) {
+                    Ok(value) => {
+                        print_json_success(value);
+                        0
+                    }
+                    Err(e) => {
+                        print_json_error(&e);
+                        1
+                    }
+                }
+            } else {
+                match dispatch(cli.cmd) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("✗ {}", e);
+                        1
+                    }
+                }
             }
-        },
+        }
         Err(err) => {
             // clap already prints help/error to stderr/stdout
             err.print().ok();
@@ -226,6 +287,33 @@ pub fn run() -> i32 {
 
 fn dispatch(cmd: Cmd) -> Result<()> {
     match cmd {
+        Cmd::Version => {
+            println!("{}", paths::WINBOX_VERSION);
+            Ok(())
+        }
+        Cmd::Distros => {
+            for (id, label) in crate::core::image_family::SUPPORTED_DISTROS {
+                println!("{id}\t{label}");
+            }
+            Ok(())
+        }
+        Cmd::HostHealth => {
+            let report = crate::core::health::report();
+            println!("{:?}", report.overall_status);
+            for check in report.checks {
+                println!("{}\t{:?}\t{}", check.id, check.status, check.message);
+            }
+            Ok(())
+        }
+        Cmd::Profile { profile } => {
+            let summary = profile_summary(&profile)?;
+            println!("{}\t{}", summary.name, summary.status);
+            Ok(())
+        }
+        Cmd::ViewerUrl { profile } => {
+            println!("{}", viewer_url(&profile)?);
+            Ok(())
+        }
         Cmd::Install(a) => cmd_install_interactive(a),
         Cmd::Launch(a) => {
             let p = profile::resolve(a.profile.as_deref())?;
@@ -236,7 +324,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             };
             cmd_launch::launch(&p, on_close)
         }
-        Cmd::Start { profile } => {
+        Cmd::Start { profile, .. } => {
             let p = profile::resolve(profile.as_deref())?;
             let docker = crate::core::docker::CliDocker;
             cmd_launch::start(&p, &docker).map_err(|e| anyhow::anyhow!("{e}"))
@@ -365,7 +453,11 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             let p = profile::resolve(profile.as_deref())?;
             lifecycle::restart(&p)
         }
-        Cmd::Remove { profile, yes } => {
+        Cmd::Remove {
+            profile,
+            yes,
+            delete_storage,
+        } => {
             if !yes {
                 let ok = Confirm::new()
                     .with_prompt(format!(
@@ -388,7 +480,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             // CLI default: also delete the custom storage path (matches the
             // GUI default with the checkbox pre-checked). Future flag could
             // expose --keep-storage if needed.
-            lifecycle::remove(&profile, true)
+            lifecycle::remove(&profile, delete_storage)
         }
         Cmd::Bundles(BundlesCmd::List) => {
             for b in bundles::list() {
@@ -459,6 +551,323 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             Ok(())
         }
         Cmd::Gui => spawn_gui(),
+    }
+}
+
+fn dispatch_json(cmd: Cmd) -> Result<Value> {
+    match cmd {
+        Cmd::Version => Ok(json!({
+            "name": "winbox",
+            "version": paths::WINBOX_VERSION,
+        })),
+        Cmd::Distros => Ok(json!(crate::core::image_family::SUPPORTED_DISTROS
+            .iter()
+            .map(|(id, label)| json!({ "id": id, "label": label }))
+            .collect::<Vec<_>>())),
+        Cmd::HostHealth => json_value(crate::core::health::report()),
+        Cmd::Profile { profile } => json_value(profile_summary(&profile)?),
+        Cmd::ViewerUrl { profile } => {
+            Ok(json!({ "profile": profile, "url": viewer_url(&profile)? }))
+        }
+        Cmd::List => json_value(crate::commands::list::list()),
+        Cmd::Install(a) => install_json(a),
+        Cmd::Launch(a) => {
+            let p = profile::resolve(a.profile.as_deref())?;
+            emit_json_progress_if_requested(
+                a.progress.as_deref(),
+                &p,
+                "launch",
+                "starting",
+                "Starting profile.",
+            );
+            cmd_launch::launch(&p, a.on_close.parse()?)?;
+            emit_json_progress_if_requested(
+                a.progress.as_deref(),
+                &p,
+                "launch",
+                "finished",
+                "Profile launched.",
+            );
+            Ok(json!({ "profile": p, "operation": "launch", "status": "finished" }))
+        }
+        Cmd::Start { profile, progress } => {
+            let p = profile::resolve(profile.as_deref())?;
+            emit_json_progress_if_requested(
+                progress.as_deref(),
+                &p,
+                "start",
+                "starting",
+                "Starting profile.",
+            );
+            let docker = crate::core::docker::CliDocker;
+            cmd_launch::start(&p, &docker).map_err(|e| anyhow::anyhow!("{e}"))?;
+            emit_json_progress_if_requested(
+                progress.as_deref(),
+                &p,
+                "start",
+                "finished",
+                "Profile started.",
+            );
+            Ok(json!({ "profile": p, "operation": "start", "status": "finished" }))
+        }
+        Cmd::Stop { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            lifecycle::stop(&p)?;
+            Ok(json!({ "profile": p, "operation": "stop", "status": "finished" }))
+        }
+        Cmd::Kill { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            lifecycle::kill(&p)?;
+            Ok(json!({ "profile": p, "operation": "kill", "status": "finished" }))
+        }
+        Cmd::Pause { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            lifecycle::pause(&p)?;
+            Ok(json!({ "profile": p, "operation": "pause", "status": "finished" }))
+        }
+        Cmd::Resume { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            lifecycle::resume(&p)?;
+            Ok(json!({ "profile": p, "operation": "resume", "status": "finished" }))
+        }
+        Cmd::Status { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            let c = paths::profile_container(&p);
+            Ok(json!({ "profile": p, "status": crate::core::docker::container_status(&c) }))
+        }
+        Cmd::Default { profile } => {
+            if let Some(profile) = profile {
+                lifecycle::set_default(&profile)?;
+            }
+            Ok(json!({ "default": profile::get_default() }))
+        }
+        Cmd::Logs { profile, tail } => {
+            let p = profile::resolve(profile.as_deref())?;
+            let output = logs::tail(&p, tail.unwrap_or(200))?;
+            Ok(json!({ "profile": p, "logs": output }))
+        }
+        Cmd::Snapshot { profile, name } => {
+            snapshots::create(&profile, &name)?;
+            Ok(json!({ "profile": profile, "snapshot": name, "status": "finished" }))
+        }
+        Cmd::Snapshots { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            json_value(snapshots::list(&p))
+        }
+        Cmd::Rollback { profile, name, .. } => {
+            snapshots::rollback(&profile, &name)?;
+            Ok(json!({ "profile": profile, "snapshot": name, "status": "finished" }))
+        }
+        Cmd::Update { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            lifecycle::update(&p)?;
+            Ok(json!({ "profile": p, "operation": "update", "status": "finished" }))
+        }
+        Cmd::Set(a) => {
+            let params = cmd_set::SetParams {
+                name: a.profile,
+                ram: a.ram,
+                cpu: a.cpu,
+                disk: a.disk,
+                user: a.user,
+                password: a.pass,
+                extra_ports: a.extra_ports,
+                gpu_bdf: a.gpu,
+                restart: a.restart,
+            };
+            let message = cmd_set::run(params)?;
+            Ok(json!({ "message": message }))
+        }
+        Cmd::Restart { profile } => {
+            let p = profile::resolve(profile.as_deref())?;
+            lifecycle::restart(&p)?;
+            Ok(json!({ "profile": p, "operation": "restart", "status": "finished" }))
+        }
+        Cmd::Remove {
+            profile,
+            delete_storage,
+            ..
+        } => {
+            lifecycle::remove(&profile, delete_storage)?;
+            Ok(json!({ "profile": profile, "operation": "remove", "status": "finished" }))
+        }
+        Cmd::Bundles(BundlesCmd::List) => json_value(bundles::list()),
+        Cmd::Bundles(BundlesCmd::Show { name }) => {
+            let src = bundles::resolve(&name)?;
+            Ok(json!({ "name": name, "content": src }))
+        }
+        Cmd::Bundles(BundlesCmd::Reapply { profile }) => {
+            let p = profile::resolve(profile.as_deref())?;
+            let path = crate::commands::reapply::run(&p)?;
+            Ok(json!({ "profile": p, "path": path }))
+        }
+        Cmd::Gpu => json_value(crate::core::gpu::list()),
+        Cmd::GpuSetup { bdf } => {
+            crate::core::vfio_setup::apply(&bdf)?;
+            Ok(json!({ "bdf": bdf, "status": "finished" }))
+        }
+        Cmd::GpuRevert { bdf } => {
+            crate::core::vfio_setup::revert(&bdf)?;
+            Ok(json!({ "bdf": bdf, "status": "finished" }))
+        }
+        Cmd::Gui => spawn_gui().map(|_| json!({ "status": "started" })),
+    }
+}
+
+fn install_json(a: InstallArgs) -> Result<Value> {
+    if !a.yes {
+        bail!("JSON install requires --yes.");
+    }
+    let name = a
+        .profile
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("JSON install requires a profile name."))?;
+    let family = a.family.clone().unwrap_or_else(|| "windows".to_string());
+    let parsed_family = crate::core::image_family::ImageFamily::parse(&family);
+    let is_windows = parsed_family == crate::core::image_family::ImageFamily::Windows;
+    if is_windows && a.pass.as_deref().unwrap_or("").is_empty() {
+        bail!("JSON Windows install requires --pass.");
+    }
+    emit_json_progress_if_requested(
+        a.progress.as_deref(),
+        &name,
+        "install",
+        "starting",
+        "Creating profile.",
+    );
+    let params = cmd_install::InstallParams {
+        name: name.clone(),
+        version: a.version.unwrap_or_else(|| "11".to_string()),
+        ram: a.ram.unwrap_or_else(|| "4G".to_string()),
+        cpu: a.cpu.unwrap_or_else(|| "2".to_string()),
+        disk: a.disk.unwrap_or_else(|| "64G".to_string()),
+        user: a.user.unwrap_or_else(|| {
+            if parsed_family == crate::core::image_family::ImageFamily::LinuxCloud {
+                "bruno".to_string()
+            } else {
+                "docker".to_string()
+            }
+        }),
+        password: a.pass.unwrap_or_default(),
+        language: a.language.unwrap_or_else(|| "Portuguese".to_string()),
+        region: a.region.unwrap_or_else(|| "pt-BR".to_string()),
+        keyboard: a.keyboard.unwrap_or_else(|| "pt-BR".to_string()),
+        bundles: a.bundle.unwrap_or_default(),
+        force: a.force,
+        gpu_bdf: a.gpu,
+        image_family: Some(family),
+        boot: a.boot,
+        iso_path: a.iso_path,
+        storage_path: a.storage_path,
+    };
+    cmd_install::run(params)?;
+    emit_json_progress_if_requested(
+        a.progress.as_deref(),
+        &name,
+        "install",
+        "finished",
+        "Profile created.",
+    );
+    let summary = profile_summary(&name)?;
+    Ok(json!({ "profile": summary, "operation": "install", "status": "finished" }))
+}
+
+fn profile_summary(name: &str) -> Result<crate::commands::list::ProfileSummary> {
+    crate::commands::list::list()
+        .into_iter()
+        .find(|profile| profile.name == name)
+        .ok_or_else(|| anyhow!("Perfil '{name}' não existe."))
+}
+
+fn viewer_url(profile: &str) -> Result<String> {
+    let env = env_file::read(&paths::profile_env_file(profile))?;
+    connect::viewer_url(&env).ok_or_else(|| anyhow!("WEB_PORT não definido para '{profile}'."))
+}
+
+fn json_value<T: Serialize>(value: T) -> Result<Value> {
+    serde_json::to_value(value).map_err(|error| anyhow!(error))
+}
+
+fn print_json_success(value: Value) {
+    println!("{}", json!({ "ok": true, "value": value }));
+}
+
+fn print_json_error(error: &anyhow::Error) {
+    println!(
+        "{}",
+        json!({
+            "ok": false,
+            "error": {
+                "code": machine_error_code(&error.to_string()),
+                "message": error.to_string(),
+                "hint": machine_error_hint(&error.to_string()),
+            }
+        })
+    );
+}
+
+fn emit_json_progress_if_requested(
+    format: Option<&str>,
+    profile: &str,
+    operation: &str,
+    phase: &str,
+    message: &str,
+) {
+    if format != Some("jsonl") {
+        return;
+    }
+    println!(
+        "{}",
+        json!({
+            "type": if phase == "finished" { "finished" } else { "progress" },
+            "profile": profile,
+            "operation": operation,
+            "phase": phase,
+            "status": if phase == "finished" { "success" } else { "running" },
+            "message": message,
+            "timestamp": chrono::Local::now().to_rfc3339(),
+        })
+    );
+}
+
+fn machine_error_code(message: &str) -> &'static str {
+    let lower = message.to_lowercase();
+    if lower.contains("docker") && lower.contains("not found")
+        || lower.contains("docker não encontrado")
+    {
+        "docker_not_installed"
+    } else if lower.contains("daemon") || lower.contains("docker info") {
+        "docker_daemon_unavailable"
+    } else if lower.contains("kvm") || lower.contains("/dev/kvm") {
+        "kvm_unavailable"
+    } else if lower.contains("storage") || lower.contains("armazenamento") {
+        "storage_path_invalid"
+    } else if lower.contains("space") || lower.contains("disco") {
+        "disk_full"
+    } else if lower.contains("port") || lower.contains("porta") {
+        "port_unavailable"
+    } else if lower.contains("não existe") || lower.contains("not found") {
+        "profile_not_found"
+    } else if lower.contains("unsupported") || lower.contains("suport") {
+        "unsupported_preset"
+    } else {
+        "operation_failed"
+    }
+}
+
+fn machine_error_hint(message: &str) -> &'static str {
+    match machine_error_code(message) {
+        "docker_not_installed" => "Install Docker Engine and retry.",
+        "docker_daemon_unavailable" => "Start Docker and verify user permissions.",
+        "kvm_unavailable" => "Enable virtualization/KVM and retry.",
+        "storage_path_invalid" => "Choose a writable local storage path with enough free space.",
+        "disk_full" => "Free disk space or choose a larger storage location.",
+        "port_unavailable" => "Check port conflicts in Host Health.",
+        "profile_not_found" => "Refresh profiles and choose an existing profile.",
+        "unsupported_preset" => "Choose one of the supported distro/version presets.",
+        _ => "Check Winbox logs and retry.",
     }
 }
 
@@ -576,9 +985,8 @@ fn cmd_install_interactive(a: InstallArgs) -> Result<()> {
     cmd_install::run(params)?;
     // Open web viewer
     if let Ok(map) = env_file::read(&paths::profile_env_file(&profile_name)) {
-        let port = env_file::get_u16(&map, "WEB_PORT");
-        if port != 0 {
-            let _ = crate::core::opener::open_url(&format!("http://{}:{}", paths::HOST, port));
+        if let Some(url) = connect::viewer_url(&map) {
+            let _ = crate::core::opener::open_url(&url);
         }
     }
     println!("Perfil '{}' criado.", profile_name);
@@ -624,4 +1032,93 @@ unsafe fn libc_setsid() {
         fn setsid() -> i32;
     }
     let _ = setsid();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_version_returns_success_value() {
+        let value = dispatch_json(Cmd::Version).expect("version");
+        assert_eq!(value["name"], "winbox");
+        assert!(value["version"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty()));
+    }
+
+    #[test]
+    fn json_distros_exposes_required_linux_presets() {
+        let value = dispatch_json(Cmd::Distros).expect("distros");
+        let ids = value
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|entry| entry["id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"ubuntu-server"));
+        assert!(ids.contains(&"xubuntu"));
+        assert!(!ids.contains(&"lubuntu"));
+    }
+
+    #[test]
+    fn json_install_args_parse_linux_contract_fields() {
+        let cli = Cli::try_parse_from([
+            "winbox",
+            "--json",
+            "install",
+            "dev-linux",
+            "--yes",
+            "--family",
+            "linux_distro",
+            "--boot",
+            "xubuntu",
+            "--progress",
+            "jsonl",
+        ])
+        .expect("parse");
+
+        assert!(cli.json);
+        let Cmd::Install(args) = cli.cmd else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.profile.as_deref(), Some("dev-linux"));
+        assert_eq!(args.family.as_deref(), Some("linux_distro"));
+        assert_eq!(args.boot.as_deref(), Some("xubuntu"));
+        assert_eq!(args.progress.as_deref(), Some("jsonl"));
+    }
+
+    #[test]
+    fn json_install_args_parse_linux_cloud_family() {
+        let cli = Cli::try_parse_from([
+            "winbox",
+            "--json",
+            "install",
+            "dev-cloud",
+            "--yes",
+            "--family",
+            "linux_cloud",
+            "--boot",
+            "xubuntu-desktop",
+        ])
+        .expect("parse");
+
+        let Cmd::Install(args) = cli.cmd else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.family.as_deref(), Some("linux_cloud"));
+        assert_eq!(args.boot.as_deref(), Some("xubuntu-desktop"));
+    }
+
+    #[test]
+    fn json_error_code_mapping_is_actionable() {
+        assert_eq!(
+            machine_error_code("docker info failed: daemon unavailable"),
+            "docker_daemon_unavailable"
+        );
+        assert_eq!(
+            machine_error_hint("Porta 8006 em uso"),
+            "Check port conflicts in Host Health."
+        );
+    }
 }
