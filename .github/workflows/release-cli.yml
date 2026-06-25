@@ -1,0 +1,85 @@
+name: release-cli
+
+# Builds the winbox-gui CLI binary for Linux/Windows/macOS and attaches the
+# packaged binaries to the GitHub release for a `v*` tag. These tarballs are what
+# downstream apps (e.g. clia.local) bundle via their prepare script.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: winbox-gui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: winbox-gui.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: winbox-gui
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri/GTK system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config \
+            build-essential
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build CLI binary
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml
+
+      - name: Package (tar.gz)
+        shell: bash
+        run: |
+          asset="winbox-${{ matrix.target }}.tar.gz"
+          tar -czf "$asset" -C "src-tauri/target/${{ matrix.target }}/release" "${{ matrix.bin }}"
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
