@@ -179,7 +179,8 @@ fn parse_size_suffix(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    let (digits, suffix): (String, String) = s.chars().partition(|c| c.is_ascii_digit() || *c == '_');
+    let (digits, suffix): (String, String) =
+        s.chars().partition(|c| c.is_ascii_digit() || *c == '_');
     let n: u64 = digits.replace('_', "").parse().ok()?;
     let mult: u64 = match suffix.trim().to_uppercase().as_str() {
         "" | "B" => 1,
@@ -481,8 +482,8 @@ networkingMode=mirrored
             ..Default::default()
         };
         let findings = evaluate(&distros, &cfg, "Ubuntu-24.04");
-        assert!(findings.iter().any(|f| {
-            f.id == "wsl_nested_virt_off" && f.severity == WslSeverity::Error
-        }));
+        assert!(findings
+            .iter()
+            .any(|f| { f.id == "wsl_nested_virt_off" && f.severity == WslSeverity::Error }));
     }
 }

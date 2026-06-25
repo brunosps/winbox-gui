@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use crate::core::image_family::ImageFamily;
+use crate::core::image_family::{is_supported_distro_boot, ImageFamily};
 use crate::core::{
-    compose, desktop, docker, gpu_hooks, host, oem, paths, ports, profile, validation,
+    cloud_init, compose, desktop, docker, gpu_hooks, host, oem, paths, ports, profile, validation,
 };
 
 #[derive(Debug, Deserialize, Clone)]
@@ -35,11 +35,12 @@ pub struct InstallParams {
     /// Optional PCI BDF (e.g. "0000:01:00.0") for GPU VFIO passthrough.
     #[serde(default, rename = "gpuBdf", alias = "gpu_bdf")]
     pub gpu_bdf: Option<String>,
-    /// "windows" | "linux_distro" | "linux_iso". Defaults to windows for
-    /// backwards compat with the legacy CLI/wizard.
+    /// "windows" | "linux_distro" | "linux_iso" | "linux_cloud". Defaults
+    /// to windows for backwards compat with the legacy CLI/wizard.
     #[serde(default, rename = "imageFamily", alias = "image_family")]
     pub image_family: Option<String>,
     /// For LinuxDistro: BOOT keyword (ubuntu, debian, ...) or full URL.
+    /// For LinuxCloud: cloud-init profile (server | xubuntu-desktop).
     #[serde(default)]
     pub boot: Option<String>,
     /// For LinuxIso: absolute path on host to local .iso/.img/.qcow2 file.
@@ -74,7 +75,27 @@ pub fn run(p: InstallParams) -> Result<()> {
     docker::require_installed()?;
     docker::check_daemon()?;
 
+    let cloud_init_profile = if matches!(family, ImageFamily::LinuxCloud) {
+        cloud_init::CloudInitProfile::parse(p.boot.as_deref())?
+    } else {
+        cloud_init::CloudInitProfile::Server
+    };
     let (web_port, rdp_port, ssh_port) = ports::allocate()?;
+    let desktop_web_port =
+        if matches!(family, ImageFamily::LinuxCloud) && cloud_init_profile.desktop_enabled() {
+            Some(ports::allocate_extra(
+                paths::BASE_WEB_PORT + 10,
+                &[web_port, rdp_port, ssh_port],
+            )?)
+        } else {
+            None
+        };
+    let desktop_web_port_env = desktop_web_port
+        .map(|port| port.to_string())
+        .unwrap_or_default();
+    let extra_ports = desktop_web_port
+        .map(|port| format!("{port}:6080/tcp"))
+        .unwrap_or_default();
     let ram = validation::normalize_ram(&p.ram)?;
     let cpu = validation::normalize_cpu(&p.cpu)?;
     let disk = validation::normalize_disk(&p.disk)?;
@@ -111,6 +132,16 @@ pub fn run(p: InstallParams) -> Result<()> {
     profile::ensure_dirs(&p.name)?;
 
     let env_path = paths::profile_env_file(&p.name);
+    let boot_value = if matches!(family, ImageFamily::LinuxCloud) {
+        "/storage/boot.qcow2".to_string()
+    } else {
+        p.boot.clone().unwrap_or_default()
+    };
+    let stored_password = if matches!(family, ImageFamily::LinuxCloud) {
+        ""
+    } else {
+        p.password.as_str()
+    };
     let body = format!(
         "IMAGE_FAMILY={family}\n\
          VERSION={ver}\n\
@@ -126,6 +157,7 @@ pub fn run(p: InstallParams) -> Result<()> {
          KEYBOARD={kb}\n\
          TZ={tz}\n\
          WEB_PORT={web}\n\
+         DESKTOP_WEB_PORT={desktop_web}\n\
          RDP_PORT={rdp}\n\
          SSH_PORT={ssh}\n\
          CONTAINER_NAME={container}\n\
@@ -135,21 +167,24 @@ pub fn run(p: InstallParams) -> Result<()> {
          MEM_LIMIT={mem}\n\
          CPU_LIMIT={cpu}\n\
          BUNDLES={bundles}\n\
+         CLOUD_INIT_PROFILE={cloud_init_profile}\n\
+         EXTRA_PORTS={extra_ports}\n\
          GPU_BDF={gpu_bdf}\n",
         family = family.as_env_value(),
         ver = p.version,
-        boot = p.boot.clone().unwrap_or_default(),
+        boot = boot_value,
         iso = p.iso_path.clone().unwrap_or_default(),
         ram = &ram.env_value,
         cpu = &cpu,
         disk = &disk,
         user = p.user,
-        pass = p.password,
+        pass = stored_password,
         lang = p.language,
         region = p.region,
         kb = p.keyboard,
         tz = tz,
         web = web_port,
+        desktop_web = desktop_web_port_env,
         rdp = rdp_port,
         ssh = ssh_port,
         container = paths::profile_container(&p.name),
@@ -160,6 +195,8 @@ pub fn run(p: InstallParams) -> Result<()> {
         oem = paths::profile_oem_dir(&p.name).display(),
         mem = mem_limit,
         bundles = &bundles,
+        cloud_init_profile = cloud_init_profile.as_env_value(),
+        extra_ports = extra_ports,
         gpu_bdf = &gpu_bdf,
     );
     std::fs::write(&env_path, body).with_context(|| format!("writing {}", env_path.display()))?;
@@ -169,6 +206,10 @@ pub fn run(p: InstallParams) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    if matches!(family, ImageFamily::LinuxCloud) {
+        cloud_init::prepare_profile(&p.name, &disk, &p.user, &p.password, cloud_init_profile)?;
     }
 
     compose::write(&p.name)?;
@@ -203,6 +244,12 @@ fn validate_family_args(family: ImageFamily, p: &InstallParams) -> Result<()> {
             if boot.is_empty() {
                 bail!("Família 'linux_distro' exige BOOT (ex: ubuntu, fedora, arch).");
             }
+            if !is_supported_distro_boot(boot) {
+                bail!(
+                    "Distro '{}' não suportada pelo qemux/qemu atual. Rode `winbox distros` para ver as opções.",
+                    boot
+                );
+            }
         }
         ImageFamily::LinuxIso => {
             let iso = p.iso_path.as_deref().unwrap_or("").trim();
@@ -210,6 +257,9 @@ fn validate_family_args(family: ImageFamily, p: &InstallParams) -> Result<()> {
                 bail!("Família 'linux_iso' exige iso_path (caminho absoluto da ISO).");
             }
             validation::validate_iso_path(iso)?;
+        }
+        ImageFamily::LinuxCloud => {
+            let _ = cloud_init::CloudInitProfile::parse(p.boot.as_deref())?;
         }
     }
     Ok(())
@@ -233,4 +283,64 @@ fn validate_env_fields(family: ImageFamily, p: &InstallParams) -> Result<()> {
     }
     validation::validate_password(&p.password, matches!(family, ImageFamily::Windows))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn linux_distro_params(boot: &str) -> InstallParams {
+        InstallParams {
+            name: "dev-linux".to_string(),
+            version: String::new(),
+            ram: "4G".to_string(),
+            cpu: "2".to_string(),
+            disk: "64G".to_string(),
+            user: String::new(),
+            password: String::new(),
+            language: String::new(),
+            region: String::new(),
+            keyboard: String::new(),
+            bundles: String::new(),
+            force: false,
+            gpu_bdf: None,
+            image_family: Some("linux_distro".to_string()),
+            boot: Some(boot.to_string()),
+            iso_path: None,
+            storage_path: None,
+        }
+    }
+
+    #[test]
+    fn linux_distro_boot_is_validated_against_qemux_keywords() {
+        assert!(
+            validate_family_args(ImageFamily::LinuxDistro, &linux_distro_params("xubuntu")).is_ok()
+        );
+
+        let error = validate_family_args(ImageFamily::LinuxDistro, &linux_distro_params("lubuntu"))
+            .expect_err("lubuntu should not be accepted by the current qemux image");
+
+        assert!(error.to_string().contains("não suportada"));
+    }
+
+    #[test]
+    fn linux_cloud_does_not_require_interactive_boot_keyword() {
+        assert!(validate_family_args(ImageFamily::LinuxCloud, &linux_distro_params("")).is_ok());
+    }
+
+    #[test]
+    fn linux_cloud_accepts_desktop_cloud_init_profile() {
+        assert!(validate_family_args(
+            ImageFamily::LinuxCloud,
+            &linux_distro_params("xubuntu-desktop"),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn linux_cloud_rejects_unknown_cloud_init_profile() {
+        assert!(
+            validate_family_args(ImageFamily::LinuxCloud, &linux_distro_params("lubuntu")).is_err()
+        );
+    }
 }

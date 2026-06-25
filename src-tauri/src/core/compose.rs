@@ -22,11 +22,11 @@ pub fn write(profile: &str) -> Result<()> {
                 (
                     String::new(),
                     String::new(),
-                    default_arguments(),
+                    default_arguments(family),
                     String::new(),
                 )
             } else {
-                build_gpu_block(&gpu_bdf)
+                build_gpu_block(family, &gpu_bdf)
             };
             let iso = env_file::get(&map, "ISO_PATH").to_string();
             (family, ports, devs, caps, ulimits, args, iso)
@@ -37,7 +37,7 @@ pub fn write(profile: &str) -> Result<()> {
                 String::new(),
                 String::new(),
                 String::new(),
-                default_arguments(),
+                default_arguments(ImageFamily::Windows),
                 String::new(),
             )
         };
@@ -51,6 +51,13 @@ pub fn write(profile: &str) -> Result<()> {
             &extra_ulimits,
         ),
         ImageFamily::LinuxDistro => render_linux_distro(
+            &arguments,
+            &extra_devices,
+            &extra_caps,
+            &extra_ports,
+            &extra_ulimits,
+        ),
+        ImageFamily::LinuxCloud => render_linux_cloud(
             &arguments,
             &extra_devices,
             &extra_caps,
@@ -161,6 +168,52 @@ fn render_linux_distro(
     )
 }
 
+fn render_linux_cloud(
+    arguments: &str,
+    devs: &str,
+    caps: &str,
+    extra: &str,
+    ulimits: &str,
+) -> String {
+    format!(
+        "services:\n  \
+         winbox:\n    \
+         image: {image}\n    \
+         container_name: ${{CONTAINER_NAME}}\n    \
+         environment:\n      \
+         BOOT: \"/storage/boot.qcow2\"\n      \
+         BOOT_INDEX: \"1\"\n      \
+         RAM_SIZE: ${{RAM_SIZE}}\n      \
+         CPU_CORES: ${{CPU_CORES}}\n      \
+         DISK_SIZE: ${{DISK_SIZE}}\n      \
+         TZ: ${{TZ}}\n      \
+         ARGUMENTS: \"{args}\"\n    \
+         devices:\n      \
+         - /dev/kvm\n      \
+         - /dev/net/tun{devs}\n    \
+         cap_add:\n      \
+         - NET_ADMIN{caps}\n    \
+         ports:\n      \
+         - \"127.0.0.1:${{WEB_PORT}}:8006\"\n      \
+         - \"127.0.0.1:${{RDP_PORT}}:3389/tcp\"\n      \
+         - \"127.0.0.1:${{RDP_PORT}}:3389/udp\"\n      \
+         - \"127.0.0.1:${{SSH_PORT}}:22/tcp\"{extra}\n    \
+         volumes:\n      \
+         - ${{STORAGE_DIR}}:/storage\n      \
+         - ${{SHARED_DIR}}:/shared{ulimits}\n    \
+         mem_limit: ${{MEM_LIMIT}}\n    \
+         cpus: \"${{CPU_LIMIT}}\"\n    \
+         restart: unless-stopped\n    \
+         stop_grace_period: 2m\n",
+        image = paths::IMAGE_QEMU,
+        args = arguments,
+        devs = devs,
+        caps = caps,
+        extra = extra,
+        ulimits = ulimits,
+    )
+}
+
 fn render_linux_iso(
     arguments: &str,
     devs: &str,
@@ -209,11 +262,15 @@ fn render_linux_iso(
     )
 }
 
-fn default_arguments() -> String {
-    "-rtc base=localtime,clock=host,driftfix=slew".to_string()
+fn default_arguments(family: ImageFamily) -> String {
+    let mut args = "-rtc base=localtime,clock=host,driftfix=slew".to_string();
+    if family.is_linux() {
+        args.push_str(" -machine graphics=on -device usb-kbd -device virtio-keyboard-pci");
+    }
+    args
 }
 
-fn build_gpu_block(bdf: &str) -> (String, String, String, String) {
+fn build_gpu_block(family: ImageFamily, bdf: &str) -> (String, String, String, String) {
     // devices: mount /dev/vfio/vfio and /dev/vfio/<group>
     let group = read_iommu_group(bdf);
     let mut devs = String::new();
@@ -235,7 +292,12 @@ fn build_gpu_block(bdf: &str) -> (String, String, String, String) {
     let args = format!(
         "-rtc base=localtime,clock=host,driftfix=slew \
          -cpu host,kvm=off,hv_vendor_id=whatever \
-         -device vfio-pci,host={bdf},multifunction=on"
+        -device vfio-pci,host={bdf},multifunction=on{}",
+        if family.is_linux() {
+            " -machine graphics=on -device usb-kbd -device virtio-keyboard-pci"
+        } else {
+            ""
+        }
     );
     (devs, caps, args, ulimits)
 }
@@ -292,7 +354,7 @@ mod tests {
 
     #[test]
     fn gpu_block_emits_memlock_and_ipc_lock() {
-        let (devs, caps, args, ulimits) = build_gpu_block("0000:01:00.0");
+        let (devs, caps, args, ulimits) = build_gpu_block(ImageFamily::Windows, "0000:01:00.0");
         assert!(devs.contains("/dev/vfio/vfio"));
         assert!(caps.contains("SYS_ADMIN"));
         assert!(
@@ -304,6 +366,23 @@ mod tests {
             "GPU profiles must lift memlock rlimit; got {ulimits:?}"
         );
         assert!(args.contains("vfio-pci,host=0000:01:00.0"));
+    }
+
+    #[test]
+    fn linux_qemu_profiles_include_usb_keyboard() {
+        assert!(!default_arguments(ImageFamily::Windows).contains("usb-kbd"));
+
+        for family in [
+            ImageFamily::LinuxDistro,
+            ImageFamily::LinuxIso,
+            ImageFamily::LinuxCloud,
+        ] {
+            assert!(
+                default_arguments(family)
+                    .contains("-machine graphics=on -device usb-kbd -device virtio-keyboard-pci"),
+                "Linux qemux profiles need explicit keyboard devices for noVNC login"
+            );
+        }
     }
 
     #[test]
@@ -319,6 +398,13 @@ mod tests {
             linux.contains(paths::IMAGE_QEMU),
             "Linux distro compose must use pinned qemu image"
         );
+        let cloud = render_linux_cloud("a", "", "", "", "");
+        assert!(
+            cloud.contains(paths::IMAGE_QEMU),
+            "Linux cloud compose must use pinned qemu image"
+        );
+        assert!(cloud.contains("BOOT: \"/storage/boot.qcow2\""));
+        assert!(cloud.contains("BOOT_INDEX: \"1\""));
         let iso = render_linux_iso("a", "", "", "", "", "/tmp/x.iso");
         assert!(
             iso.contains(paths::IMAGE_QEMU),
@@ -326,7 +412,7 @@ mod tests {
         );
         // Defensive: regression — never emit an unpinned `image: dockurr/windows\n`
         // (the bare repo with no tag implies `:latest`, breaking reproducibility).
-        for sample in [&win, &linux, &iso] {
+        for sample in [&win, &linux, &cloud, &iso] {
             assert!(
                 !sample.contains("image: dockurr/windows\n")
                     && !sample.contains("image: qemux/qemu\n"),

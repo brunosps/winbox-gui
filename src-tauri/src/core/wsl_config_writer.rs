@@ -99,10 +99,7 @@ pub fn render_wslconfig_with(existing: &str, overrides: &WslConfigOverrides) -> 
         if in_wsl2 {
             if let Some((key, _)) = trimmed.split_once('=') {
                 let lower = key.trim().to_lowercase();
-                if let Some(pos) = wanted
-                    .iter()
-                    .position(|(k, _)| k.to_lowercase() == lower)
-                {
+                if let Some(pos) = wanted.iter().position(|(k, _)| k.to_lowercase() == lower) {
                     let (k, v) = &wanted[pos];
                     out.push(format!("{}={}", k, v));
                     consumed[pos] = true;
@@ -221,9 +218,14 @@ mod tests {
             },
         );
         // networkingMode must land inside [wsl2], BEFORE [experimental].
-        let net_idx = body.find("networkingMode=mirrored").expect("networking present");
+        let net_idx = body
+            .find("networkingMode=mirrored")
+            .expect("networking present");
         let exp_idx = body.find("[experimental]").expect("experimental present");
-        assert!(net_idx < exp_idx, "networking key landed after wrong section");
+        assert!(
+            net_idx < exp_idx,
+            "networking key landed after wrong section"
+        );
         assert!(body.contains("foo=bar"));
     }
 

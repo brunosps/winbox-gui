@@ -10,12 +10,15 @@ pub struct ProfileSummary {
     pub status: String,
     pub web_port: u16,
     pub rdp_port: u16,
+    pub ssh_port: u16,
     pub ram: String,
     pub bundles: String,
+    pub shared_dir: String,
     pub is_default: bool,
     pub image_family: ImageFamily,
     pub connect_mode: ConnectMode,
     pub boot: String,
+    pub cloud_init_profile: String,
     pub iso_path: String,
 }
 
@@ -34,19 +37,23 @@ pub fn list() -> Vec<ProfileSummary> {
             };
             let family = ImageFamily::from_env_map(&map);
             let boot = env_file::get(&map, "BOOT").to_string();
+            let cloud_init_profile = env_file::get(&map, "CLOUD_INIT_PROFILE").to_string();
             let iso_path = env_file::get(&map, "ISO_PATH").to_string();
             let connect_mode = connect::resolve(family, &boot);
             Some(ProfileSummary {
                 is_default: default.as_deref() == Some(name.as_str()),
-                web_port: env_file::get_u16(&map, "WEB_PORT"),
+                web_port: connect::viewer_port(&map),
                 rdp_port: env_file::get_u16(&map, "RDP_PORT"),
+                ssh_port: env_file::get_u16(&map, "SSH_PORT"),
                 ram: env_file::get(&map, "RAM_SIZE").to_string(),
                 bundles: env_file::get(&map, "BUNDLES").to_string(),
+                shared_dir: env_file::get(&map, "SHARED_DIR").to_string(),
                 status,
                 name,
                 image_family: family,
                 connect_mode,
                 boot,
+                cloud_init_profile,
                 iso_path,
             })
         })

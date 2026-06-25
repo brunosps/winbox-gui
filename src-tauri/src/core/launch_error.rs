@@ -33,7 +33,10 @@ pub enum LaunchError {
     WslDistroDown { distro: String },
     /// Container was killed by the kernel OOM killer. The user almost
     /// always needs to raise `RAM_SIZE` in the profile.
-    ContainerOomKilled { container: String, mem_limit: String },
+    ContainerOomKilled {
+        container: String,
+        mem_limit: String,
+    },
     /// A required ISO (Windows installer, Linux distro, etc.) couldn't
     /// be downloaded. Carries the upstream URL and the HTTP status we
     /// observed (0 for connection failure).
@@ -72,7 +75,9 @@ impl LaunchError {
             LaunchError::ContainerOomKilled { .. } => "container_oom_killed",
             LaunchError::IsoDownloadFailed { .. } => "iso_download_failed",
             LaunchError::KvmNestedNotEnabled => "kvm_nested_not_enabled",
-            LaunchError::DockerDesktopWslIntegrationOff { .. } => "docker_desktop_wsl_integration_off",
+            LaunchError::DockerDesktopWslIntegrationOff { .. } => {
+                "docker_desktop_wsl_integration_off"
+            }
             LaunchError::DiskFull { .. } => "disk_full",
             LaunchError::StoragePathInvalid { .. } => "storage_path_invalid",
             LaunchError::Other { .. } => "other",
@@ -203,10 +208,7 @@ mod tests {
                 },
                 "iso_download_failed",
             ),
-            (
-                LaunchError::KvmNestedNotEnabled,
-                "kvm_nested_not_enabled",
-            ),
+            (LaunchError::KvmNestedNotEnabled, "kvm_nested_not_enabled"),
             (
                 LaunchError::DockerDesktopWslIntegrationOff {
                     distro: "Ubuntu".into(),

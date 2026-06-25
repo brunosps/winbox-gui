@@ -1,5 +1,6 @@
 pub mod bootstrap;
 pub mod bundles;
+pub mod cloud_init;
 pub mod compose;
 pub mod connect;
 pub mod desktop;
