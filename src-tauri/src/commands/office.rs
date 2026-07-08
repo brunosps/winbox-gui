@@ -7,12 +7,13 @@ use crate::core::{
     env_file,
     flatpak::CliFlatpakClient,
     guest_executor::{
-        self, CliGuestExecutor, GuestExecutor, GuestRemoteappNotPrepared,
-        GUEST_REMOTEAPP_NOT_PREPARED_CODE, REMOTEAPP_ACTION_HINT, REMOTEAPP_PREPARE_MARKER,
+        self, CliGuestExecutor, GuestExecutor, GuestPhaseError, GuestPhaseTimeout,
+        GuestRemoteappNotPrepared, GUEST_REMOTEAPP_NOT_PREPARED_CODE, REMOTEAPP_ACTION_HINT,
+        REMOTEAPP_PREPARE_MARKER,
     },
     office_odt::{
         self, CliOdtHost, OdtHost, OfficeOdtStage, OfficeOdtStageFailed, OfficeOdtStageOptions,
-        OFFICE_ODT_STAGE_FAILED_CODE,
+        OFFICE_INSTALL_MARKER, OFFICE_ODT_STAGE_FAILED_CODE,
     },
     office_preflight::{self, CliHostPreflight, OfficePreflightResult, Resources},
     office_state::{OfficeLastError, OfficePhase, OfficeProvisioningState, PhaseEvidence},
@@ -61,6 +62,10 @@ pub fn stage_odt(profile: &str) -> Result<OfficeProvisioningState> {
     stage_odt_with_host(profile, &CliOdtHost)
 }
 
+pub fn install_office(profile: &str) -> Result<OfficeProvisioningState> {
+    install_office_with_executor(profile, &CliGuestExecutor)
+}
+
 pub fn stage_odt_with_host(profile: &str, host: &dyn OdtHost) -> Result<OfficeProvisioningState> {
     let profile_dir = paths::profile_cfg_dir(profile);
     let env_path = paths::profile_env_file(profile);
@@ -77,6 +82,19 @@ pub fn stage_odt_with_host(profile: &str, host: &dyn OdtHost) -> Result<OfficePr
         &config,
         &OfficeOdtStageOptions::default(),
         host,
+    )
+}
+
+pub fn install_office_with_executor(
+    profile: &str,
+    executor: &dyn GuestExecutor,
+) -> Result<OfficeProvisioningState> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    install_office_at(
+        profile,
+        &profile_dir,
+        executor,
+        GuestPhaseTimeout::office_install(),
     )
 }
 
@@ -261,6 +279,118 @@ fn fail_odt_stage(
     )))
 }
 
+fn install_office_at(
+    profile: &str,
+    profile_dir: &Path,
+    executor: &dyn GuestExecutor,
+    timeout: GuestPhaseTimeout,
+) -> Result<OfficeProvisioningState> {
+    let mut state = OfficeProvisioningState::load_or_default(profile_dir, profile)?;
+    state.ensure_remoteapp_ready_for_guest_phase(OfficePhase::OfficeInstall)?;
+    if state.phase_status(OfficePhase::OfficeStageOdt)
+        != Some(crate::core::office_state::PhaseStatus::Done)
+    {
+        return fail_office_install(
+            state,
+            profile_dir,
+            GuestPhaseError::ExecutorFailed {
+                phase: OfficePhase::OfficeInstall.as_str().to_string(),
+                detail: "A fase office_install exige office_stage_odt concluída.".to_string(),
+            },
+        );
+    }
+    state.mark_phase_running(OfficePhase::OfficeInstall)?;
+
+    let marker = match guest_executor::start_detached_and_wait_for_marker(
+        profile,
+        executor,
+        office_odt::office_install_guest_script(),
+        timeout,
+    ) {
+        Ok(marker) => marker,
+        Err(err) => return fail_office_install(state, profile_dir, err),
+    };
+    match guest_executor::verify_office_install_marker(&marker) {
+        Ok(verification) => {
+            mark_office_install_done(&mut state, verification)?;
+            state.save_to_dir(profile_dir)?;
+            Ok(state)
+        }
+        Err(err) => fail_office_install(state, profile_dir, err),
+    }
+}
+
+fn mark_office_install_done(
+    state: &mut OfficeProvisioningState,
+    verification: guest_executor::OfficeInstallVerification,
+) -> Result<()> {
+    let exe_paths = verification
+        .office
+        .exe_paths
+        .as_ref()
+        .map(|paths| {
+            [
+                paths.excel.clone(),
+                paths.winword.clone(),
+                paths.powerpnt.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    state.mark_phase_done(
+        OfficePhase::OfficeInstall,
+        Some(PhaseEvidence {
+            marker: Some(OFFICE_INSTALL_MARKER.to_string()),
+            exit_code: Some(verification.exit_code),
+            files: exe_paths,
+            registry: Some(serde_json::json!({
+                "productReleaseIds": verification.office.product_release_ids,
+                "versionToReport": verification.office.version_to_report,
+                "platform": verification.office.platform,
+            })),
+            ..PhaseEvidence::default()
+        }),
+    )
+}
+
+fn fail_office_install(
+    mut state: OfficeProvisioningState,
+    profile_dir: &Path,
+    error: GuestPhaseError,
+) -> Result<OfficeProvisioningState> {
+    let code = error.code();
+    state.mark_phase_failed(OfficeLastError {
+        code: code.to_string(),
+        message: office_install_error_message(code),
+        phase: OfficePhase::OfficeInstall,
+        retryable: true,
+        details: Some(error.details_json()),
+    });
+    state.save_to_dir(profile_dir)?;
+    Err(anyhow::anyhow!(error))
+}
+
+fn office_install_error_message(code: &str) -> String {
+    match code {
+        guest_executor::GUEST_PHASE_TIMEOUT_CODE => {
+            "Instalação do Office não publicou marker antes do timeout.".to_string()
+        }
+        guest_executor::GUEST_DISK_FULL_CODE => {
+            "Instalação do Office ficou sem espaço no guest.".to_string()
+        }
+        guest_executor::OFFICE_ODT_FAILED_CODE => {
+            "Office Deployment Tool falhou ao instalar Microsoft 365 Apps.".to_string()
+        }
+        guest_executor::OFFICE_DETECTION_FAILED_CODE => {
+            "Office não passou na verificação ClickToRun e executáveis.".to_string()
+        }
+        _ => "Executor guest falhou ao iniciar ou observar a instalação Office.".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +499,7 @@ mod tests {
                 status: GuestMarkerStatus::Done,
                 exit_code: Some(0),
                 error: None,
+                office: None,
                 updated_at: Some("2026-07-08T00:00:00Z".to_string()),
             }),
         );
@@ -474,6 +605,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn office_install_marker_done_updates_state() {
+        let root = temp_dir("install-ok");
+        let profile_dir = root.join("profile");
+        let mut state = OfficeProvisioningState::new("office");
+        for phase in [OfficePhase::RemoteappPrepare, OfficePhase::OfficeStageOdt] {
+            state.mark_phase_running(phase).expect("phase should run");
+            state
+                .mark_phase_done(phase, None)
+                .expect("phase should finish");
+        }
+        state.save_to_dir(&profile_dir).expect("state should save");
+        let executor = MockGuestExecutor::new();
+        executor.seed_marker(OFFICE_INSTALL_MARKER, Some(office_done_marker()));
+
+        let state = install_office_at(
+            "office",
+            &profile_dir,
+            &executor,
+            GuestPhaseTimeout::immediate("office_install", OFFICE_INSTALL_MARKER),
+        )
+        .expect("office install marker should complete phase");
+
+        assert_eq!(
+            state.phase_status(OfficePhase::OfficeInstall),
+            Some(PhaseStatus::Done)
+        );
+        let evidence = state
+            .phases
+            .get(&OfficePhase::OfficeInstall)
+            .and_then(|phase| phase.evidence.as_ref())
+            .expect("office install evidence should be stored");
+        assert_eq!(evidence.marker.as_deref(), Some(OFFICE_INSTALL_MARKER));
+        assert_eq!(evidence.exit_code, Some(0));
+        assert_eq!(evidence.files.len(), 3);
+        assert_eq!(executor.detached_runs().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn office_install_timeout_persists_guest_phase_timeout() {
+        let root = temp_dir("install-timeout");
+        let profile_dir = root.join("profile");
+        let mut state = OfficeProvisioningState::new("office");
+        for phase in [OfficePhase::RemoteappPrepare, OfficePhase::OfficeStageOdt] {
+            state.mark_phase_running(phase).expect("phase should run");
+            state
+                .mark_phase_done(phase, None)
+                .expect("phase should finish");
+        }
+        state.save_to_dir(&profile_dir).expect("state should save");
+        let executor = MockGuestExecutor::new();
+
+        let err = install_office_at(
+            "office",
+            &profile_dir,
+            &executor,
+            GuestPhaseTimeout::immediate("office_install", OFFICE_INSTALL_MARKER),
+        )
+        .expect_err("missing marker should persist timeout");
+        let message = format!("{err:#}");
+        let state = OfficeProvisioningState::load_or_default(&profile_dir, "office")
+            .expect("failed state should load");
+
+        assert!(message.contains(guest_executor::GUEST_PHASE_TIMEOUT_CODE));
+        assert_eq!(
+            state.phase_status(OfficePhase::OfficeInstall),
+            Some(PhaseStatus::Failed)
+        );
+        let last_error = state.last_error.expect("last_error should be stored");
+        assert_eq!(last_error.code, guest_executor::GUEST_PHASE_TIMEOUT_CODE);
+        assert_eq!(last_error.phase, OfficePhase::OfficeInstall);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -485,5 +691,31 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("temp dir should be created");
         dir
+    }
+
+    fn office_done_marker() -> GuestMarker {
+        GuestMarker {
+            phase: "office_install".to_string(),
+            status: GuestMarkerStatus::Done,
+            exit_code: Some(0),
+            error: None,
+            office: Some(guest_executor::OfficeInstallEvidence {
+                product_release_ids: Some("O365ProPlusRetail".to_string()),
+                version_to_report: Some("16.0.12345.67890".to_string()),
+                platform: Some("x64".to_string()),
+                exe_paths: Some(guest_executor::OfficeExePaths {
+                    excel: Some(
+                        r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE".to_string(),
+                    ),
+                    winword: Some(
+                        r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE".to_string(),
+                    ),
+                    powerpnt: Some(
+                        r"C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE".to_string(),
+                    ),
+                }),
+            }),
+            updated_at: Some("2026-07-08T00:00:00Z".to_string()),
+        }
     }
 }
