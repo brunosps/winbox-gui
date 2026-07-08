@@ -6,6 +6,7 @@ pub mod connect;
 pub mod desktop;
 pub mod docker;
 pub mod env_file;
+pub mod flatpak;
 pub mod gpu;
 pub mod gpu_bind;
 pub mod gpu_hooks;

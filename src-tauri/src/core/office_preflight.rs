@@ -4,7 +4,11 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::{docker::DockerClient, host, paths};
+use super::{
+    docker::DockerClient,
+    flatpak::{self, FlatpakClient, FlatpakInstallConsent},
+    host, paths,
+};
 
 pub const MIN_RAM_GB: u32 = 4;
 pub const RECOMMENDED_RAM_GB: u32 = 8;
@@ -70,6 +74,9 @@ pub enum OfficeError {
     PreflightKvmMissing,
     PreflightDockerMissing,
     PreflightSubnetConflict,
+    FlatpakFreerdpMissing,
+    FlatpakHomeOverrideMissing,
+    NativeFreerdpTooOld,
 }
 
 impl PreflightCheck {
@@ -194,12 +201,13 @@ impl HostPreflight for CliHostPreflight {
 pub fn run_preflight(
     resources: &Resources,
     docker: &dyn DockerClient,
+    flatpak: &dyn FlatpakClient,
     host: &dyn HostPreflight,
 ) -> Result<OfficePreflightResult> {
     resources.validate()?;
     let storage_path = resources.storage_path_buf();
     let host_resources = host.host_resources(&storage_path);
-    let checks = classify_preflight(resources, docker, host, host_resources);
+    let checks = classify_preflight(resources, docker, flatpak, host, host_resources);
     validate_checks(&checks)?;
     let warnings = checks
         .iter()
@@ -220,13 +228,16 @@ pub fn run_preflight(
 pub fn classify_preflight(
     resources: &Resources,
     docker: &dyn DockerClient,
+    flatpak: &dyn FlatpakClient,
     host: &dyn HostPreflight,
     host_resources: HostResources,
 ) -> Vec<PreflightCheck> {
-    let mut checks = Vec::new();
-    checks.push(classify_kvm(host.kvm_status()));
-    checks.push(classify_docker(docker));
-    checks.push(classify_connectivity(host.connectivity_available()));
+    let mut checks = vec![
+        classify_kvm(host.kvm_status()),
+        classify_docker(docker),
+        flatpak::detect_freerdp(flatpak, FlatpakInstallConsent::Unknown).check,
+        classify_connectivity(host.connectivity_available()),
+    ];
     checks.extend(classify_resources(resources, host_resources));
     checks
 }
@@ -442,6 +453,7 @@ fn free_space_gb_for(path: &Path) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::core::docker::mock::MockDocker;
+    use crate::core::flatpak::mock::MockFlatpakClient;
 
     #[derive(Debug, Clone)]
     struct FakeHost {
@@ -499,6 +511,15 @@ mod tests {
     fn preflight_uses_mock_docker_without_daemon() {
         let docker = MockDocker::new();
         docker.seed_preflight(true, false, true);
+        let flatpak = MockFlatpakClient::new();
+        flatpak.seed_xfreerdp_version(
+            "xfreerdp",
+            Some(crate::core::flatpak::CommandOutput {
+                success: true,
+                stdout: "This is FreeRDP version 3.28.0".to_string(),
+                stderr: String::new(),
+            }),
+        );
         let host = FakeHost {
             kvm: KvmStatus::Available,
             connectivity: true,
@@ -516,7 +537,8 @@ mod tests {
             warning_override: false,
         };
 
-        let result = run_preflight(&resources, &docker, &host).expect("preflight should classify");
+        let result =
+            run_preflight(&resources, &docker, &flatpak, &host).expect("preflight should classify");
 
         assert_eq!(result.blockers, 1);
         assert!(result.checks.iter().any(|check| {
