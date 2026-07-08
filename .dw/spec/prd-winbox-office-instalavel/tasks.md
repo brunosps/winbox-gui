@@ -27,7 +27,7 @@ feat/prd-winbox-office-instalavel
 |------|-----------|-----|------------|--------|
 | 1.0 | Registrar ADRs obrigatórios da feature Office | FR-3.5, FR-3.6 | - | Concluída |
 | 2.0 | Modelar estado persistido, fases e retry em cascata | FR-6.1, FR-6.2 | 1.0 | Concluída |
-| 3.0 | Validar configuração Office e imutabilidade do perfil | FR-4.3, FR-4.4 | 2.0 | Pendente |
+| 3.0 | Validar configuração Office e imutabilidade do perfil | FR-4.3, FR-4.4 | 2.0 | Concluída |
 | 4.0 | Implementar preflight base com erros acionáveis | FR-2.1, FR-2.2 | 3.0 | Pendente |
 | 5.0 | Detectar FreeRDP nativo/Flatpak e preparar fallback | FR-2.4 | 4.0 | Pendente |
 | 6.0 | Detectar recursos insuficientes e conflitos de subnet | FR-2.3, FR-2.5 | 4.0 | Pendente |
@@ -59,7 +59,7 @@ feat/prd-winbox-office-instalavel
 
 - [x] 1.0 Registrar ADRs obrigatórios da feature Office
 - [x] 2.0 Modelar estado persistido, fases e retry em cascata
-- [ ] 3.0 Validar configuração Office e imutabilidade do perfil
+- [x] 3.0 Validar configuração Office e imutabilidade do perfil
 - [ ] 4.0 Implementar preflight base com erros acionáveis
 - [ ] 5.0 Detectar FreeRDP nativo/Flatpak e preparar fallback
 - [ ] 6.0 Detectar recursos insuficientes e conflitos de subnet

@@ -443,6 +443,9 @@ fn dispatch(cmd: Cmd) -> Result<()> {
                 password: a.pass,
                 extra_ports: a.extra_ports,
                 gpu_bdf: a.gpu,
+                version: None,
+                language: None,
+                office_language: None,
                 restart: a.restart,
             };
             let msg = cmd_set::run(params)?;
@@ -673,6 +676,9 @@ fn dispatch_json(cmd: Cmd) -> Result<Value> {
                 password: a.pass,
                 extra_ports: a.extra_ports,
                 gpu_bdf: a.gpu,
+                version: None,
+                language: None,
+                office_language: None,
                 restart: a.restart,
             };
             let message = cmd_set::run(params)?;

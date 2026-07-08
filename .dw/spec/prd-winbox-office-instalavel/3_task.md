@@ -66,6 +66,8 @@ Ver techspec §§Modelos de Dados, Compatibilidade com Perfis Existentes, Valida
 - `src-tauri/src/core/validation.rs`
 - `src-tauri/src/core/office_state.rs`
 - `src-tauri/src/core/profile.rs`
+- `src-tauri/src/commands/set.rs`
+- `src-tauri/src/commands/reapply.rs`
 
 ## Commit ao Final
 

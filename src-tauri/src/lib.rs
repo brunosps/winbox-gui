@@ -688,6 +688,9 @@ async fn update_profile(app: AppHandle, params: UpdateArgs) -> Result<OperationR
         password: params.password,
         extra_ports: params.extra_ports,
         gpu_bdf: params.gpu_bdf,
+        version: None,
+        language: None,
+        office_language: None,
         restart: params.restart,
     };
     let profile_name = params.name;
