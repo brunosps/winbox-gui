@@ -1,0 +1,25 @@
+# Redis 7 — cache, pub/sub, BullMQ backend
+# Env vars: REDIS_PORT (default 6379), REDIS_PASSWORD (optional in dev)
+# Application-side: REDIS_URL=redis://redis:6379  or  redis://:${REDIS_PASSWORD}@redis:6379
+
+redis:
+  image: redis:7-alpine
+  restart: unless-stopped
+  command: ${REDIS_PASSWORD:+redis-server --requirepass ${REDIS_PASSWORD}}
+  ports:
+    - "${REDIS_PORT:-6379}:6379"
+  volumes:
+    - redis_data:/data
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 3s
+
+# volumes:
+#   redis_data: {}
+#
+# Prod notes:
+# - Always set REDIS_PASSWORD in prod. Drop public port; expose only on internal network.
+# - For persistence in prod, mount a Redis config file with appendonly yes and tune save points.

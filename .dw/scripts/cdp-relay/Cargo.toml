@@ -1,0 +1,16 @@
+[package]
+name = "cdp-relay"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny forward/reverse TCP relay so WSL can reach a Windows browser's CDP debug port in NAT mode without admin setup."
+
+[[bin]]
+name = "cdp-relay"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

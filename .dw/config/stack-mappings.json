@@ -1,0 +1,40 @@
+{
+  "_note": "Maps a detected stack to its curated baseline rule files (in .dw/rules-library/), relevant bundled skills, and safe default permissions. Consumed by /dw-analyze-project (detect + seed constitution) and /dw-review (declarative bar). Load ONLY the active stack's rules — never the whole library. Indicators: a bare filename means 'file exists'; 'file:substring' means the file contains the substring.",
+  "stacks": [
+    {
+      "id": "typescript",
+      "indicators": ["tsconfig.json", "package.json:typescript"],
+      "rules": ["common", "typescript"],
+      "skills": ["dw-testing-discipline", "dw-simplification"],
+      "permissions": { "allow": ["npx tsc", "npx eslint", "npm test", "pnpm test"], "deny": ["npm publish"] }
+    },
+    {
+      "id": "react",
+      "indicators": ["package.json:react"],
+      "rules": ["common", "typescript", "react"],
+      "skills": ["dw-ui-discipline", "vercel-react-best-practices", "dw-testing-discipline"],
+      "permissions": { "allow": ["npm test", "pnpm test", "npx vitest"], "deny": [] }
+    },
+    {
+      "id": "python",
+      "indicators": ["pyproject.toml", "requirements.txt", "setup.py"],
+      "rules": ["common", "python"],
+      "skills": ["dw-testing-discipline", "dw-silent-failure"],
+      "permissions": { "allow": ["pytest", "ruff", "mypy"], "deny": [] }
+    },
+    {
+      "id": "rust",
+      "indicators": ["Cargo.toml"],
+      "rules": ["common", "rust"],
+      "skills": ["dw-testing-discipline"],
+      "permissions": { "allow": ["cargo test", "cargo clippy", "cargo check"], "deny": [] }
+    },
+    {
+      "id": "csharp",
+      "indicators": [".csproj", ".sln"],
+      "rules": ["common", "csharp"],
+      "skills": ["dw-testing-discipline"],
+      "permissions": { "allow": ["dotnet test", "dotnet build"], "deny": [] }
+    }
+  ]
+}

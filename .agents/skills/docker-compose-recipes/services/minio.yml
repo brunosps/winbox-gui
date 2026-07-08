@@ -1,0 +1,30 @@
+# MinIO — S3-compatible object storage (dev replacement for AWS S3)
+# Env vars: MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, MINIO_API_PORT (default 9000), MINIO_UI_PORT (default 9001)
+# Application-side: AWS_ENDPOINT_URL=http://minio:9000; AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}; AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+
+minio:
+  image: minio/minio:latest
+  restart: unless-stopped
+  command: server /data --console-address ":9001"
+  environment:
+    MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio12345}
+  ports:
+    - "${MINIO_API_PORT:-9000}:9000"
+    - "${MINIO_UI_PORT:-9001}:9001"
+  volumes:
+    - minio_data:/data
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 5s
+
+# volumes:
+#   minio_data: {}
+#
+# Prod notes:
+# - In prod, replace with real S3 (or another managed object store). MinIO is great in dev,
+#   acceptable in prod only if you understand the operational requirements (HA, erasure coding, replication).
+# - Always rotate MINIO_ROOT_PASSWORD; default credentials must NOT survive past local dev.

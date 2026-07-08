@@ -1,0 +1,30 @@
+# LocalStack — AWS-compatible local (S3, SQS, SNS, DynamoDB, etc.)
+# Env vars: LOCALSTACK_PORT (default 4566), LOCALSTACK_SERVICES (comma list, e.g., "s3,sqs,sns,dynamodb")
+# Application-side: AWS_ENDPOINT_URL=http://localstack:4566; AWS_ACCESS_KEY_ID=test; AWS_SECRET_ACCESS_KEY=test; AWS_REGION=us-east-1
+
+localstack:
+  image: localstack/localstack:3
+  restart: unless-stopped
+  environment:
+    SERVICES: ${LOCALSTACK_SERVICES:-s3,sqs,sns,dynamodb}
+    DEBUG: ${LOCALSTACK_DEBUG:-0}
+    LS_LOG: ${LOCALSTACK_LOG:-warn}
+    AWS_DEFAULT_REGION: us-east-1
+  ports:
+    - "${LOCALSTACK_PORT:-4566}:4566"
+  volumes:
+    - localstack_data:/var/lib/localstack
+    - /var/run/docker.sock:/var/run/docker.sock
+  healthcheck:
+    test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"running\"'"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 20s
+
+# volumes:
+#   localstack_data: {}
+#
+# Prod notes:
+# - LocalStack is for DEV ONLY. In prod, point AWS_ENDPOINT_URL back to real AWS and remove this service.
+# - The Docker socket mount is required for Lambda emulation; remove if Lambda is not used.

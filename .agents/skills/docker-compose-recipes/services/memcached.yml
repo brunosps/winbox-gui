@@ -1,0 +1,19 @@
+# Memcached 1.6 — cache (no persistence)
+# Env vars: MEMCACHED_PORT (default 11211), MEMCACHED_MEMORY_MB (default 64)
+
+memcached:
+  image: memcached:1.6-alpine
+  restart: unless-stopped
+  command: -m ${MEMCACHED_MEMORY_MB:-64}
+  ports:
+    - "${MEMCACHED_PORT:-11211}:11211"
+  healthcheck:
+    test: ["CMD-SHELL", "echo stats | nc -w 1 localhost 11211 | grep -q uptime"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 3s
+
+# Prod notes:
+# - Memcached has no auth. NEVER expose its port publicly. Internal network only.
+# - For multi-host setups, use a managed cache (Redis, ElastiCache).
