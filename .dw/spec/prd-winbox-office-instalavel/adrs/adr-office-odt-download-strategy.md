@@ -1,6 +1,6 @@
 ---
 id: "002"
-status: Proposed
+status: Accepted
 title: "Usar ODT staged com configure no guest"
 date: 2026-07-08
 prd: prd-winbox-office-instalavel

@@ -1,6 +1,6 @@
 ---
 id: "001"
-status: Proposed
+status: Accepted
 title: "Manter WinApps como runtime upstream pinado"
 date: 2026-07-08
 prd: prd-winbox-office-instalavel

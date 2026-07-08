@@ -25,7 +25,7 @@ feat/prd-winbox-office-instalavel
 
 | Task | Descrição | FRs | Depende de | Status |
 |------|-----------|-----|------------|--------|
-| 1.0 | Registrar ADRs obrigatórios da feature Office | FR-3.5, FR-3.6 | - | Pendente |
+| 1.0 | Registrar ADRs obrigatórios da feature Office | FR-3.5, FR-3.6 | - | Concluída |
 | 2.0 | Modelar estado persistido, fases e retry em cascata | FR-6.1, FR-6.2 | 1.0 | Pendente |
 | 3.0 | Validar configuração Office e imutabilidade do perfil | FR-4.3, FR-4.4 | 2.0 | Pendente |
 | 4.0 | Implementar preflight base com erros acionáveis | FR-2.1, FR-2.2 | 3.0 | Pendente |
@@ -57,7 +57,7 @@ feat/prd-winbox-office-instalavel
 
 ## Progresso
 
-- [ ] 1.0 Registrar ADRs obrigatórios da feature Office
+- [x] 1.0 Registrar ADRs obrigatórios da feature Office
 - [ ] 2.0 Modelar estado persistido, fases e retry em cascata
 - [ ] 3.0 Validar configuração Office e imutabilidade do perfil
 - [ ] 4.0 Implementar preflight base com erros acionáveis

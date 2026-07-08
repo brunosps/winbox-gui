@@ -1,6 +1,6 @@
 ---
 id: "003"
-status: Proposed
+status: Accepted
 title: "Usar cert ignore em RDP local do perfil Office"
 date: 2026-07-08
 prd: prd-winbox-office-instalavel
