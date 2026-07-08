@@ -32,8 +32,8 @@ pub struct OfficeStartProvisioningArgs {
 }
 
 pub fn preflight(args: OfficePreflightArgs) -> Result<OfficePreflightResult> {
-    let _profile_name = args.name.as_deref().unwrap_or("");
     office_preflight::run_preflight(
+        args.name.as_deref(),
         &args.resources,
         &CliDocker,
         &CliFlatpakClient,

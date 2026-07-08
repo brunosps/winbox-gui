@@ -30,7 +30,7 @@ feat/prd-winbox-office-instalavel
 | 3.0 | Validar configuração Office e imutabilidade do perfil | FR-4.3, FR-4.4 | 2.0 | Concluída |
 | 4.0 | Implementar preflight base com erros acionáveis | FR-2.1, FR-2.2 | 3.0 | Concluída |
 | 5.0 | Detectar FreeRDP nativo/Flatpak e preparar fallback | FR-2.4 | 4.0 | Concluída |
-| 6.0 | Detectar recursos insuficientes e conflitos de subnet | FR-2.3, FR-2.5 | 4.0 | Pendente |
+| 6.0 | Detectar recursos insuficientes e conflitos de subnet | FR-2.3, FR-2.5 | 4.0 | Concluída |
 | 7.0 | Preparar RemoteApp antes do executor guest | FR-3.6, FR-5.2 | 2.0, 3.0, 4.0 | Pendente |
 | 8.0 | Gerar staging ODT, XML e integridade do instalador | FR-4.2, FR-4.7 | 3.0, 7.0 | Pendente |
 | 9.0 | Executar instalação Office no guest e verificar readiness | FR-5.1, FR-5.5 | 7.0, 8.0 | Pendente |
@@ -62,7 +62,7 @@ feat/prd-winbox-office-instalavel
 - [x] 3.0 Validar configuração Office e imutabilidade do perfil
 - [x] 4.0 Implementar preflight base com erros acionáveis
 - [x] 5.0 Detectar FreeRDP nativo/Flatpak e preparar fallback
-- [ ] 6.0 Detectar recursos insuficientes e conflitos de subnet
+- [x] 6.0 Detectar recursos insuficientes e conflitos de subnet
 - [ ] 7.0 Preparar RemoteApp antes do executor guest
 - [ ] 8.0 Gerar staging ODT, XML e integridade do instalador
 - [ ] 9.0 Executar instalação Office no guest e verificar readiness

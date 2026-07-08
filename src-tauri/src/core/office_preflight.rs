@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use super::{
@@ -152,6 +153,7 @@ pub trait HostPreflight {
     fn kvm_status(&self) -> KvmStatus;
     fn connectivity_available(&self) -> bool;
     fn host_resources(&self, storage_path: &Path) -> HostResources;
+    fn ip_routes(&self) -> Result<String>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,9 +198,21 @@ impl HostPreflight for CliHostPreflight {
             free_disk_gb: free_space_gb_for(storage_path).unwrap_or(info.free_gb),
         }
     }
+
+    fn ip_routes(&self) -> Result<String> {
+        let out = Command::new("ip").arg("route").output()?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+        }
+        bail!(
+            "ip route falhou: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+    }
 }
 
 pub fn run_preflight(
+    profile_name: Option<&str>,
     resources: &Resources,
     docker: &dyn DockerClient,
     flatpak: &dyn FlatpakClient,
@@ -207,7 +221,14 @@ pub fn run_preflight(
     resources.validate()?;
     let storage_path = resources.storage_path_buf();
     let host_resources = host.host_resources(&storage_path);
-    let checks = classify_preflight(resources, docker, flatpak, host, host_resources);
+    let checks = classify_preflight(
+        profile_name,
+        resources,
+        docker,
+        flatpak,
+        host,
+        host_resources,
+    );
     validate_checks(&checks)?;
     let warnings = checks
         .iter()
@@ -226,6 +247,7 @@ pub fn run_preflight(
 }
 
 pub fn classify_preflight(
+    profile_name: Option<&str>,
     resources: &Resources,
     docker: &dyn DockerClient,
     flatpak: &dyn FlatpakClient,
@@ -238,7 +260,16 @@ pub fn classify_preflight(
         flatpak::detect_freerdp(flatpak, FlatpakInstallConsent::Unknown).check,
         classify_connectivity(host.connectivity_available()),
     ];
+    checks.push(classify_subnet(profile_name, docker, host));
     checks.extend(classify_resources(resources, host_resources));
+    if resource_warning_override_required(resources, host_resources) {
+        checks.push(PreflightCheck::blocker(
+            "preflight_warning_override_required",
+            "Warnings de RAM/disco precisam de confirmação explícita.",
+            "O perfil Office pode prosseguir com recursos abaixo do recomendado, mas só depois do usuário aceitar o risco.",
+            "Ative warningOverride no wizard ou aumente RAM/disco para os valores recomendados.",
+        ));
+    }
     checks
 }
 
@@ -340,11 +371,11 @@ fn classify_resources(requested: &Resources, host_resources: HostResources) -> V
 
 fn classify_ram(requested: u32, host_total: u32) -> PreflightCheck {
     if host_total > 0 && host_total < requested {
-        return PreflightCheck::blocker(
+        return PreflightCheck::warning(
             "preflight_resources",
             "RAM física suficiente para o perfil Office.",
-            "A VM não deve receber mais RAM do que o host disponível.",
-            "Reduza RAM do perfil ou use um host com mais memória.",
+            "Pedir mais RAM do que o host reporta pode degradar o Linux e travar o Windows.",
+            "Reduza RAM do perfil, use um host com mais memória ou prossiga assumindo o risco.",
         );
     }
     if requested < MIN_RAM_GB {
@@ -404,11 +435,11 @@ fn classify_cpu(requested: u32, host_total: u32) -> PreflightCheck {
 
 fn classify_disk(requested: u32, free: u32) -> PreflightCheck {
     if free > 0 && free < requested {
-        return PreflightCheck::blocker(
+        return PreflightCheck::warning(
             "preflight_resources",
             "Espaço livre suficiente para o disco da VM.",
-            "Sem espaço livre, Docker/Windows/Office podem falhar no meio da instalação.",
-            "Libere espaço ou escolha outro storagePath antes de provisionar.",
+            "Sem folga de disco, Docker/Windows/Office podem falhar no meio da instalação.",
+            "Libere espaço, escolha outro storagePath ou prossiga assumindo o risco.",
         );
     }
     if requested < MIN_DISK_GB {
@@ -432,6 +463,198 @@ fn classify_disk(requested: u32, free: u32) -> PreflightCheck {
         "Disco adequado para o perfil Office.",
         "Há espaço suficiente para o MVP.",
     )
+}
+
+fn resource_warning_override_required(
+    requested: &Resources,
+    host_resources: HostResources,
+) -> bool {
+    !requested.warning_override
+        && (requested.ram_gb < RECOMMENDED_RAM_GB
+            || requested.disk_gb < RECOMMENDED_DISK_GB
+            || (host_resources.ram_gb > 0 && host_resources.ram_gb < requested.ram_gb)
+            || (host_resources.free_disk_gb > 0 && host_resources.free_disk_gb < requested.disk_gb))
+}
+
+fn classify_subnet(
+    profile_name: Option<&str>,
+    docker: &dyn DockerClient,
+    host: &dyn HostPreflight,
+) -> PreflightCheck {
+    let network = compose_default_network(profile_name);
+
+    // Best-effort by design: Docker can pick a different pool after preflight.
+    // Failures here must not hide blockers from KVM/Docker/FreeRDP/connectivity.
+    let docker_cidrs = docker
+        .docker_network_inspect(&network)
+        .map(|output| parse_docker_network_cidrs(&output))
+        .unwrap_or_default()
+        .into_iter()
+        .chain(
+            docker
+                .docker_daemon_json()
+                .map(|output| parse_daemon_default_address_pools(&output))
+                .unwrap_or_default(),
+        )
+        .collect::<Vec<_>>();
+    let route_cidrs = host
+        .ip_routes()
+        .map(|output| parse_route_cidrs(&output))
+        .unwrap_or_default();
+
+    if let Some((docker_cidr, route_cidr)) = detect_subnet_conflict(&docker_cidrs, &route_cidrs) {
+        let action_hint = "Configure default-address-pools em /etc/docker/daemon.json com uma faixa que não sobreponha a rede local e recrie a rede do perfil.";
+        return PreflightCheck::new(
+            "preflight_subnet_conflict",
+            PreflightStatus::Blocker,
+            "Subnet Docker do perfil não deve sobrepor rotas locais.",
+            "Conflito de rede pode impedir RDP, downloads do ODT ou acesso do guest à internet.",
+            Some(action_hint.to_string()),
+            Some(serde_json::json!({
+                "bestEffort": true,
+                "network": network,
+                "dockerCidr": docker_cidr.to_string(),
+                "hostRoute": route_cidr.to_string(),
+                "action_hint": action_hint,
+            })),
+        );
+    }
+
+    PreflightCheck::new(
+        "preflight_subnet",
+        PreflightStatus::Ok,
+        "Subnet Docker do perfil deve ser compatível com rotas locais.",
+        "Nenhuma sobreposição foi detectada na checagem preventiva.",
+        None,
+        Some(serde_json::json!({
+            "bestEffort": true,
+            "network": network,
+            "dockerCidrs": docker_cidrs.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "hostRoutes": route_cidrs.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        })),
+    )
+}
+
+fn compose_default_network(profile_name: Option<&str>) -> String {
+    let profile = profile_name
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or("office");
+    format!("winbox-{profile}_default")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Ipv4Cidr {
+    addr: u32,
+    prefix: u8,
+}
+
+impl Ipv4Cidr {
+    fn parse(value: &str) -> Option<Self> {
+        let (ip, prefix) = value.trim().split_once('/')?;
+        let ip = ip.parse::<Ipv4Addr>().ok()?;
+        let prefix = prefix.parse::<u8>().ok()?;
+        if prefix > 32 {
+            return None;
+        }
+        Some(Self {
+            addr: u32::from(ip),
+            prefix,
+        })
+    }
+
+    fn bounds(self) -> (u32, u32) {
+        let mask = if self.prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - self.prefix)
+        };
+        let start = self.addr & mask;
+        let end = start | !mask;
+        (start, end)
+    }
+}
+
+impl std::fmt::Display for Ipv4Cidr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", Ipv4Addr::from(self.addr), self.prefix)
+    }
+}
+
+fn parse_route_cidrs(output: &str) -> Vec<Ipv4Cidr> {
+    output
+        .lines()
+        .filter(|line| !is_docker_owned_route(line))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|first| *first != "default")
+        .filter_map(Ipv4Cidr::parse)
+        .collect()
+}
+
+fn is_docker_owned_route(line: &str) -> bool {
+    let mut tokens = line.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == "dev" {
+            let device = tokens.next().unwrap_or("");
+            return device.starts_with("docker")
+                || device.starts_with("br-")
+                || device.starts_with("veth")
+                || device.starts_with("virbr");
+        }
+    }
+    false
+}
+
+fn parse_docker_network_cidrs(output: &str) -> Vec<Ipv4Cidr> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    value
+        .as_array()
+        .into_iter()
+        .flat_map(|networks| networks.iter())
+        .flat_map(|network| {
+            network
+                .pointer("/IPAM/Config")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flat_map(|configs| configs.iter())
+        })
+        .filter_map(|config| config.get("Subnet").and_then(serde_json::Value::as_str))
+        .filter_map(Ipv4Cidr::parse)
+        .collect()
+}
+
+fn parse_daemon_default_address_pools(output: &str) -> Vec<Ipv4Cidr> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    value
+        .get("default-address-pools")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flat_map(|pools| pools.iter())
+        .filter_map(|pool| pool.get("base").and_then(serde_json::Value::as_str))
+        .filter_map(Ipv4Cidr::parse)
+        .collect()
+}
+
+fn detect_subnet_conflict(
+    docker_cidrs: &[Ipv4Cidr],
+    route_cidrs: &[Ipv4Cidr],
+) -> Option<(Ipv4Cidr, Ipv4Cidr)> {
+    docker_cidrs.iter().find_map(|docker_cidr| {
+        route_cidrs
+            .iter()
+            .find(|route_cidr| cidr_overlaps(*docker_cidr, **route_cidr))
+            .map(|route_cidr| (*docker_cidr, *route_cidr))
+    })
+}
+
+fn cidr_overlaps(left: Ipv4Cidr, right: Ipv4Cidr) -> bool {
+    let (left_start, left_end) = left.bounds();
+    let (right_start, right_end) = right.bounds();
+    left_start <= right_end && right_start <= left_end
 }
 
 fn free_space_gb_for(path: &Path) -> Option<u32> {
@@ -460,6 +683,7 @@ mod tests {
         kvm: KvmStatus,
         connectivity: bool,
         resources: HostResources,
+        routes: Option<String>,
     }
 
     impl HostPreflight for FakeHost {
@@ -473,6 +697,46 @@ mod tests {
 
         fn host_resources(&self, _storage_path: &Path) -> HostResources {
             self.resources
+        }
+
+        fn ip_routes(&self) -> Result<String> {
+            self.routes
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("ip route indisponível"))
+        }
+    }
+
+    fn native_freerdp_ok(flatpak: &MockFlatpakClient) {
+        flatpak.seed_xfreerdp_version(
+            "xfreerdp",
+            Some(crate::core::flatpak::CommandOutput {
+                success: true,
+                stdout: "This is FreeRDP version 3.28.0".to_string(),
+                stderr: String::new(),
+            }),
+        );
+    }
+
+    fn good_host(routes: Option<&str>) -> FakeHost {
+        FakeHost {
+            kvm: KvmStatus::Available,
+            connectivity: true,
+            resources: HostResources {
+                ram_gb: 32,
+                cpu_cores: 8,
+                free_disk_gb: 512,
+            },
+            routes: routes.map(str::to_string),
+        }
+    }
+
+    fn recommended_resources() -> Resources {
+        Resources {
+            ram_gb: 8,
+            cpu_cores: 4,
+            disk_gb: 128,
+            storage_path: None,
+            warning_override: false,
         }
     }
 
@@ -512,14 +776,7 @@ mod tests {
         let docker = MockDocker::new();
         docker.seed_preflight(true, false, true);
         let flatpak = MockFlatpakClient::new();
-        flatpak.seed_xfreerdp_version(
-            "xfreerdp",
-            Some(crate::core::flatpak::CommandOutput {
-                success: true,
-                stdout: "This is FreeRDP version 3.28.0".to_string(),
-                stderr: String::new(),
-            }),
-        );
+        native_freerdp_ok(&flatpak);
         let host = FakeHost {
             kvm: KvmStatus::Available,
             connectivity: true,
@@ -528,17 +785,12 @@ mod tests {
                 cpu_cores: 8,
                 free_disk_gb: 512,
             },
+            routes: Some(String::new()),
         };
-        let resources = Resources {
-            ram_gb: 8,
-            cpu_cores: 4,
-            disk_gb: 128,
-            storage_path: None,
-            warning_override: false,
-        };
+        let resources = recommended_resources();
 
-        let result =
-            run_preflight(&resources, &docker, &flatpak, &host).expect("preflight should classify");
+        let result = run_preflight(Some("office"), &resources, &docker, &flatpak, &host)
+            .expect("preflight should classify");
 
         assert_eq!(result.blockers, 1);
         assert!(result.checks.iter().any(|check| {
@@ -546,5 +798,190 @@ mod tests {
                 && check.status == PreflightStatus::Blocker
                 && check.requirement.contains("daemon")
         }));
+    }
+
+    #[test]
+    fn parse_route_cidrs_reads_real_ip_route_output() {
+        let output = "\
+default via 192.168.15.1 dev wlp0s20f3 proto dhcp metric 600
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1
+172.30.10.0/24 dev enp5s0 proto kernel scope link src 172.30.10.20
+192.168.15.0/24 dev wlp0s20f3 proto kernel scope link src 192.168.15.44 metric 600
+";
+
+        let cidrs = parse_route_cidrs(output);
+
+        assert_eq!(
+            cidrs.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec!["172.30.10.0/24", "192.168.15.0/24"]
+        );
+        assert!(parse_route_cidrs("").is_empty());
+    }
+
+    #[test]
+    fn parse_docker_cidrs_reads_network_inspect_and_daemon_pools() {
+        let inspect = r#"[
+          {
+            "Name": "winbox-office_default",
+            "IPAM": {
+              "Config": [
+                { "Subnet": "172.30.0.0/16", "Gateway": "172.30.0.1" }
+              ]
+            }
+          }
+        ]"#;
+        let daemon = r#"{
+          "default-address-pools": [
+            { "base": "10.89.0.0/16", "size": 24 }
+          ]
+        }"#;
+
+        assert_eq!(
+            parse_docker_network_cidrs(inspect)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec!["172.30.0.0/16"]
+        );
+        assert_eq!(
+            parse_daemon_default_address_pools(daemon)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec!["10.89.0.0/16"]
+        );
+        assert!(parse_docker_network_cidrs("not json").is_empty());
+    }
+
+    #[test]
+    fn detect_subnet_conflict_detects_overlap_and_ignores_disjoint() {
+        let docker = vec![Ipv4Cidr::parse("172.30.0.0/16").unwrap()];
+        let route = vec![Ipv4Cidr::parse("172.30.10.0/24").unwrap()];
+        let disjoint = vec![Ipv4Cidr::parse("192.168.15.0/24").unwrap()];
+
+        let conflict = detect_subnet_conflict(&docker, &route).expect("should overlap");
+
+        assert_eq!(conflict.0.to_string(), "172.30.0.0/16");
+        assert_eq!(conflict.1.to_string(), "172.30.10.0/24");
+        assert!(detect_subnet_conflict(&docker, &disjoint).is_none());
+    }
+
+    #[test]
+    fn subnet_conflict_detected_between_docker_and_host_routes() {
+        let docker = MockDocker::new();
+        docker.seed_preflight(true, true, true);
+        docker.seed_network_inspect(
+            "winbox-office_default",
+            Some(
+                r#"[{"Name":"winbox-office_default","IPAM":{"Config":[{"Subnet":"172.30.0.0/16"}]}}]"#,
+            ),
+        );
+        let flatpak = MockFlatpakClient::new();
+        native_freerdp_ok(&flatpak);
+        let host = good_host(Some(
+            "172.30.10.0/24 dev enp5s0 proto kernel scope link src 172.30.10.20\n",
+        ));
+        let resources = recommended_resources();
+
+        let result = run_preflight(Some("office"), &resources, &docker, &flatpak, &host)
+            .expect("preflight should classify subnet conflict");
+        let check = result
+            .checks
+            .iter()
+            .find(|check| check.id == "preflight_subnet_conflict")
+            .expect("subnet conflict should be reported");
+
+        assert_eq!(check.status, PreflightStatus::Blocker);
+        assert!(check
+            .action_hint
+            .as_deref()
+            .unwrap_or("")
+            .contains("default-address-pools"));
+        assert!(check
+            .details
+            .as_ref()
+            .and_then(|details| details.get("action_hint"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .contains("default-address-pools"));
+    }
+
+    #[test]
+    fn resource_warning_requires_explicit_override() {
+        let docker = MockDocker::new();
+        docker.seed_preflight(true, true, true);
+        let flatpak = MockFlatpakClient::new();
+        native_freerdp_ok(&flatpak);
+        let host = good_host(Some(""));
+        let resources_without_override = Resources {
+            ram_gb: 4,
+            cpu_cores: 4,
+            disk_gb: 64,
+            storage_path: None,
+            warning_override: false,
+        };
+
+        let blocked = run_preflight(
+            Some("office"),
+            &resources_without_override,
+            &docker,
+            &flatpak,
+            &host,
+        )
+        .expect("resource warning should classify");
+
+        assert!(blocked.checks.iter().any(|check| {
+            check.id == "preflight_resources" && check.status == PreflightStatus::Warning
+        }));
+        assert!(blocked.checks.iter().any(|check| {
+            check.id == "preflight_warning_override_required"
+                && check.status == PreflightStatus::Blocker
+        }));
+
+        let resources_with_override = Resources {
+            warning_override: true,
+            ..resources_without_override
+        };
+        let allowed = run_preflight(
+            Some("office"),
+            &resources_with_override,
+            &docker,
+            &flatpak,
+            &host,
+        )
+        .expect("explicit override should allow warnings");
+
+        assert!(allowed.checks.iter().any(|check| {
+            check.id == "preflight_resources" && check.status == PreflightStatus::Warning
+        }));
+        assert!(!allowed
+            .checks
+            .iter()
+            .any(|check| check.id == "preflight_warning_override_required"));
+    }
+
+    #[test]
+    fn subnet_check_best_effort_never_masks_other_blockers() {
+        let docker = MockDocker::new();
+        docker.seed_preflight(false, true, true);
+        docker.seed_network_inspect("winbox-office_default", None);
+        let flatpak = MockFlatpakClient::new();
+        native_freerdp_ok(&flatpak);
+        let host = FakeHost {
+            routes: None,
+            ..good_host(None)
+        };
+        let resources = recommended_resources();
+
+        let result = run_preflight(Some("office"), &resources, &docker, &flatpak, &host)
+            .expect("best-effort subnet failure should not fail preflight classification");
+
+        assert!(result.checks.iter().any(|check| {
+            check.id == "preflight_docker_missing" && check.status == PreflightStatus::Blocker
+        }));
+        assert!(!result
+            .checks
+            .iter()
+            .any(|check| check.id == "preflight_subnet_conflict"));
     }
 }

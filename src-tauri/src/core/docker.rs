@@ -37,6 +37,8 @@ pub trait DockerClient {
     fn docker_binary_available(&self) -> bool;
     fn docker_daemon_available(&self) -> bool;
     fn docker_compose_available(&self) -> bool;
+    fn docker_network_inspect(&self, network: &str) -> Result<String>;
+    fn docker_daemon_json(&self) -> Result<String>;
     fn container_status(&self, name: &str) -> String;
     fn compose_run(
         &self,
@@ -98,6 +100,25 @@ impl DockerClient for CliDocker {
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false)
+    }
+
+    fn docker_network_inspect(&self, network: &str) -> Result<String> {
+        let out = Command::new("docker")
+            .args(["network", "inspect", network])
+            .output()?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+        }
+        bail!(
+            "docker network inspect {} falhou: {}",
+            network,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+    }
+
+    fn docker_daemon_json(&self) -> Result<String> {
+        std::fs::read_to_string("/etc/docker/daemon.json")
+            .map_err(|err| anyhow!("não foi possível ler /etc/docker/daemon.json: {err}"))
     }
 
     fn container_status(&self, name: &str) -> String {
@@ -668,7 +689,7 @@ pub mod mock {
     //! Test double: records every call and returns scripted values.
 
     use super::{DockerClient, LaunchError};
-    use anyhow::Result;
+    use anyhow::{anyhow, bail, Result};
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -682,6 +703,8 @@ pub mod mock {
         pub docker_binary_available: RefCell<bool>,
         pub docker_daemon_available: RefCell<bool>,
         pub docker_compose_available: RefCell<bool>,
+        pub network_inspect_outputs: RefCell<HashMap<String, Option<String>>>,
+        pub daemon_json_output: RefCell<Option<String>>,
     }
 
     impl MockDocker {
@@ -711,6 +734,14 @@ pub mod mock {
             *self.docker_daemon_available.borrow_mut() = docker_daemon;
             *self.docker_compose_available.borrow_mut() = docker_compose;
         }
+        pub fn seed_network_inspect(&self, network: &str, output: Option<&str>) {
+            self.network_inspect_outputs
+                .borrow_mut()
+                .insert(network.to_string(), output.map(str::to_string));
+        }
+        pub fn seed_daemon_json(&self, output: &str) {
+            *self.daemon_json_output.borrow_mut() = Some(output.to_string());
+        }
         pub fn calls(&self) -> Vec<String> {
             self.calls.borrow().clone()
         }
@@ -733,6 +764,22 @@ pub mod mock {
         fn docker_compose_available(&self) -> bool {
             self.record("preflight", "docker_compose");
             *self.docker_compose_available.borrow()
+        }
+
+        fn docker_network_inspect(&self, network: &str) -> Result<String> {
+            self.record("network_inspect", network);
+            match self.network_inspect_outputs.borrow().get(network) {
+                Some(Some(output)) => Ok(output.clone()),
+                _ => bail!("network inspect não disponível para {network}"),
+            }
+        }
+
+        fn docker_daemon_json(&self) -> Result<String> {
+            self.record("daemon_json", "/etc/docker/daemon.json");
+            self.daemon_json_output
+                .borrow()
+                .clone()
+                .ok_or_else(|| anyhow!("daemon.json ausente no mock"))
         }
 
         fn container_status(&self, name: &str) -> String {
