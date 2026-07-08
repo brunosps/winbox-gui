@@ -309,19 +309,23 @@ pub fn probe_remoteapp_channel(profile: &str, executor: &dyn GuestExecutor) -> R
     Ok(run)
 }
 
-fn guest_scripts_dir(shared_dir: &Path) -> PathBuf {
-    shared_dir.join(OFFICE_SHARE_DIR).join(SCRIPTS_DIR)
+pub fn office_share_dir(shared_dir: &Path) -> PathBuf {
+    shared_dir.join(OFFICE_SHARE_DIR)
 }
 
-fn guest_markers_dir(shared_dir: &Path) -> PathBuf {
-    shared_dir.join(OFFICE_SHARE_DIR).join(MARKERS_DIR)
+pub fn guest_scripts_dir(shared_dir: &Path) -> PathBuf {
+    office_share_dir(shared_dir).join(SCRIPTS_DIR)
 }
 
-fn guest_logs_dir(shared_dir: &Path) -> PathBuf {
-    shared_dir.join(OFFICE_SHARE_DIR).join(LOGS_DIR)
+pub fn guest_markers_dir(shared_dir: &Path) -> PathBuf {
+    office_share_dir(shared_dir).join(MARKERS_DIR)
 }
 
-fn guest_script_unc(file_name: &str) -> String {
+pub fn guest_logs_dir(shared_dir: &Path) -> PathBuf {
+    office_share_dir(shared_dir).join(LOGS_DIR)
+}
+
+pub fn guest_script_unc(file_name: &str) -> String {
     format!(r"{GUEST_SHARE_ROOT}\{OFFICE_SHARE_DIR}\{SCRIPTS_DIR}\{file_name}")
 }
 

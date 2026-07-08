@@ -10,6 +10,10 @@ use crate::core::{
         self, CliGuestExecutor, GuestExecutor, GuestRemoteappNotPrepared,
         GUEST_REMOTEAPP_NOT_PREPARED_CODE, REMOTEAPP_ACTION_HINT, REMOTEAPP_PREPARE_MARKER,
     },
+    office_odt::{
+        self, CliOdtHost, OdtHost, OfficeOdtStage, OfficeOdtStageFailed, OfficeOdtStageOptions,
+        OFFICE_ODT_STAGE_FAILED_CODE,
+    },
     office_preflight::{self, CliHostPreflight, OfficePreflightResult, Resources},
     office_state::{OfficeLastError, OfficePhase, OfficeProvisioningState, PhaseEvidence},
     paths,
@@ -51,6 +55,29 @@ pub fn preflight(args: OfficePreflightArgs) -> Result<OfficePreflightResult> {
 
 pub fn prepare_remoteapp(profile: &str) -> Result<OfficeProvisioningState> {
     prepare_remoteapp_with_executor(profile, &CliGuestExecutor)
+}
+
+pub fn stage_odt(profile: &str) -> Result<OfficeProvisioningState> {
+    stage_odt_with_host(profile, &CliOdtHost)
+}
+
+pub fn stage_odt_with_host(profile: &str, host: &dyn OdtHost) -> Result<OfficeProvisioningState> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    let env_path = paths::profile_env_file(profile);
+    let map = env_file::read(&env_path)?;
+    let shared_dir = env_path_or_default(
+        env_file::get(&map, "SHARED_DIR"),
+        paths::profile_shared_dir(profile),
+    );
+    let config = office_odt::OfficeOdtConfig::from_env_map(&map)?;
+    stage_odt_at(
+        profile,
+        &profile_dir,
+        &shared_dir,
+        &config,
+        &OfficeOdtStageOptions::default(),
+        host,
+    )
 }
 
 pub fn prepare_remoteapp_with_executor(
@@ -162,11 +189,84 @@ fn env_path_or_default(value: &str, default: PathBuf) -> PathBuf {
     }
 }
 
+fn stage_odt_at(
+    profile: &str,
+    profile_dir: &Path,
+    shared_dir: &Path,
+    config: &office_odt::OfficeOdtConfig,
+    options: &OfficeOdtStageOptions,
+    host: &dyn OdtHost,
+) -> Result<OfficeProvisioningState> {
+    let mut state = OfficeProvisioningState::load_or_default(profile_dir, profile)?;
+    state.ensure_remoteapp_ready_for_guest_phase(OfficePhase::OfficeStageOdt)?;
+    state.mark_phase_running(OfficePhase::OfficeStageOdt)?;
+
+    match office_odt::stage_odt_assets(shared_dir, config, options, host) {
+        Ok(stage) => {
+            mark_odt_stage_done(&mut state, &stage)?;
+            state.save_to_dir(profile_dir)?;
+            Ok(state)
+        }
+        Err(err) => fail_odt_stage(state, profile_dir, format!("{err:#}")),
+    }
+}
+
+fn mark_odt_stage_done(state: &mut OfficeProvisioningState, stage: &OfficeOdtStage) -> Result<()> {
+    state.mark_phase_done(
+        OfficePhase::OfficeStageOdt,
+        Some(PhaseEvidence {
+            files: vec![
+                stage.setup_exe.display().to_string(),
+                stage.configuration_xml.display().to_string(),
+                stage.install_script.display().to_string(),
+                stage.verify_script.display().to_string(),
+            ],
+            registry: Some(serde_json::json!({
+                "odtMode": office_odt::OFFICE_ODT_MODE_CONFIGURE_CDN,
+                "setupUrl": office_odt::OFFICE_SETUP_URL,
+                "integrity": match &stage.integrity {
+                    office_odt::OfficeSetupIntegrity::Sha256 { hash } => serde_json::json!({
+                        "method": "sha256",
+                        "hash": hash,
+                    }),
+                    office_odt::OfficeSetupIntegrity::AuthenticodeGuest { script } => serde_json::json!({
+                        "method": "authenticode_guest",
+                        "script": script,
+                    }),
+                }
+            })),
+            ..PhaseEvidence::default()
+        }),
+    )
+}
+
+fn fail_odt_stage(
+    mut state: OfficeProvisioningState,
+    profile_dir: &Path,
+    detail: String,
+) -> Result<OfficeProvisioningState> {
+    state.mark_phase_failed(OfficeLastError {
+        code: OFFICE_ODT_STAGE_FAILED_CODE.to_string(),
+        message: "Falha ao preparar Office Deployment Tool no share do perfil.".to_string(),
+        phase: OfficePhase::OfficeStageOdt,
+        retryable: true,
+        details: Some(serde_json::json!({
+            "detail": detail,
+            "actionHint": "Verifique rede/curl, permissão de escrita no SHARED_DIR e, se o hash do ODT mudou, atualize o hash pinado da release após validação.",
+        })),
+    });
+    state.save_to_dir(profile_dir)?;
+    Err(anyhow::anyhow!(OfficeOdtStageFailed::new(
+        "não foi possível preparar setup.exe/configuration.xml no share"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::guest_executor::mock::MockGuestExecutor;
     use crate::core::guest_executor::{GuestMarker, GuestMarkerStatus};
+    use crate::core::office_odt::mock::MockOdtHost;
     use crate::core::office_state::PhaseStatus;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -281,6 +381,96 @@ mod tests {
             Some(PhaseStatus::Done)
         );
         assert!(executor.runs().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn odt_stage_host_failure_returns_office_odt_stage_failed() {
+        let root = temp_dir("odt-fail");
+        let profile_dir = root.join("profile");
+        let shared_dir = root.join("shared");
+        let mut state = OfficeProvisioningState::new("office");
+        state
+            .mark_phase_running(OfficePhase::RemoteappPrepare)
+            .expect("remoteapp should run");
+        state
+            .mark_phase_done(OfficePhase::RemoteappPrepare, None)
+            .expect("remoteapp should be done");
+        state.save_to_dir(&profile_dir).expect("state should save");
+        let config = office_odt::OfficeOdtConfig::new("O365ProPlusRetail", "pt-br", "Current")
+            .expect("valid odt config");
+        let host = MockOdtHost::new();
+        host.fail_download("rede indisponível");
+
+        let err = stage_odt_at(
+            "office",
+            &profile_dir,
+            &shared_dir,
+            &config,
+            &OfficeOdtStageOptions::default(),
+            &host,
+        )
+        .expect_err("host staging failure should return code");
+        let message = format!("{err:#}");
+        let state = OfficeProvisioningState::load_or_default(&profile_dir, "office")
+            .expect("failed state should persist");
+
+        assert!(message.contains(OFFICE_ODT_STAGE_FAILED_CODE));
+        assert_eq!(
+            state.phase_status(OfficePhase::OfficeStageOdt),
+            Some(PhaseStatus::Failed)
+        );
+        let last_error = state.last_error.expect("last_error should be stored");
+        assert_eq!(last_error.code, OFFICE_ODT_STAGE_FAILED_CODE);
+        assert_eq!(last_error.phase, OfficePhase::OfficeStageOdt);
+        assert!(last_error.retryable);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn odt_stage_reads_office_options_from_config_env() {
+        let root = temp_dir("odt-env");
+        let profile_name = "office";
+        let profile_dir = root.join("profile");
+        let shared_dir = root.join("shared");
+        let env = env_file::parse(
+            "PROFILE_KIND=office\n\
+             OFFICE_PRODUCT_ID=O365BusinessRetail\n\
+             OFFICE_LANGUAGE=en-us\n\
+             OFFICE_CHANNEL=Current\n",
+        );
+        let config = office_odt::OfficeOdtConfig::from_env_map(&env)
+            .expect("Office config should come from config.env values");
+        let mut state = OfficeProvisioningState::new(profile_name);
+        state
+            .mark_phase_running(OfficePhase::RemoteappPrepare)
+            .expect("remoteapp should run");
+        state
+            .mark_phase_done(OfficePhase::RemoteappPrepare, None)
+            .expect("remoteapp should be done");
+        state.save_to_dir(&profile_dir).expect("state should save");
+        let host = MockOdtHost::new();
+
+        let state = stage_odt_at(
+            profile_name,
+            &profile_dir,
+            &shared_dir,
+            &config,
+            &OfficeOdtStageOptions::default(),
+            &host,
+        )
+        .expect("odt stage should pass");
+        let xml = std::fs::read_to_string(
+            office_odt::odt_dir(&shared_dir).join(office_odt::OFFICE_CONFIGURATION_XML),
+        )
+        .expect("xml should be written");
+
+        assert_eq!(
+            state.phase_status(OfficePhase::OfficeStageOdt),
+            Some(PhaseStatus::Done)
+        );
+        assert!(xml.contains("<Product ID=\"O365BusinessRetail\">"));
+        assert!(xml.contains("<Language ID=\"en-us\" />"));
         let _ = std::fs::remove_dir_all(root);
     }
 
