@@ -1,0 +1,14 @@
+{
+  "updated_at": "2026-07-08T14:39:06Z",
+  "version": 1,
+  "mode": "full",
+  "files_scanned": 54,
+  "bugfixes_indexed": 0,
+  "files": {
+    "stack.json": "fc38eca8493a495fca2aec93e322420a00bd95d43779cdfafc65fb877e51db19",
+    "files.json": "6c09a4a52710ee99ebed4143e160cdc8b25a62272c570c744844eb93f11d722b",
+    "apis.json": "fd1e92656a1a4801002f410ef95fd6dc6f69c9e06d8fa97f0b79676f783c28ba",
+    "deps.json": "5be955836f11d3ce00db207bbf25802f59a55acce7ce6e6f916cf057bb0c8841",
+    "arch.md": "5dccaf3d6e87fa5ac59ff7e3f049da21211467e2366b9af30d67488c956a927a"
+  }
+}

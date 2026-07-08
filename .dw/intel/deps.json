@@ -1,0 +1,23 @@
+{
+  "_meta": { "updated_at": "2026-07-08T14:39:06Z", "version": 1 },
+  "entries": {
+    "tauri": { "version": "2", "type": "production", "used_by": ["src-tauri/src/lib.rs"], "invocation": "require" },
+    "clap": { "version": "4", "type": "production", "used_by": ["src-tauri/src/cli.rs"], "invocation": "require" },
+    "anyhow": { "version": "1", "type": "production", "used_by": ["src-tauri/src/ (todo o core e commands)"], "invocation": "require" },
+    "serde": { "version": "1", "type": "production", "used_by": ["src-tauri/src/lib.rs", "src-tauri/src/core/launch_error.rs"], "invocation": "require" },
+    "sysinfo": { "version": "*", "type": "production", "used_by": ["src-tauri/src/core/host.rs"], "invocation": "require" },
+    "include_dir": { "version": "*", "type": "production", "used_by": ["src-tauri/src/core/bundles.rs"], "invocation": "require" },
+    "dialoguer": { "version": "*", "type": "production", "used_by": ["src-tauri/src/cli.rs"], "invocation": "require" },
+    "which": { "version": "*", "type": "production", "used_by": ["src-tauri/src/core/docker.rs", "src-tauri/src/core/gpu_bind.rs"], "invocation": "require" },
+    "chrono": { "version": "*", "type": "production", "used_by": ["src-tauri/src/cli.rs (progress jsonl)", "src-tauri/src/core/snapshots.rs"], "invocation": "require" },
+    "@tauri-apps/api": { "version": "^2.0.0", "type": "production", "used_by": [], "invocation": "implicit (frontend usa window.__TAURI__ global, não importa o pacote)" },
+    "@tauri-apps/cli": { "version": "^2.0.0", "type": "development", "used_by": ["package.json#dev", "package.json#build"], "invocation": "npm run dev / build" },
+    "webdriverio + @wdio/*": { "version": "^9.27", "type": "development", "used_by": ["tests/e2e/wdio.conf.mjs"], "invocation": "npm run test:e2e" },
+    "mocha": { "version": "^11", "type": "development", "used_by": ["tests/e2e/wdio.conf.mjs"], "invocation": "npm run test:e2e" },
+    "dockurr/windows:5.14 (imagem Docker)": { "version": "5.14 (pinada em core/paths.rs)", "type": "production", "used_by": ["src-tauri/src/core/compose.rs"], "invocation": "docker compose (runtime)" },
+    "qemux/qemu:7.29 (imagem Docker)": { "version": "7.29 (pinada em core/paths.rs)", "type": "production", "used_by": ["src-tauri/src/core/compose.rs", "src-tauri/src/core/cloud_init.rs (genisoimage)"], "invocation": "docker compose (runtime)" },
+    "winapps (upstream, copyleft)": { "version": "HEAD (clone em runtime)", "type": "optional", "used_by": ["scripts/setup-host-excel.sh"], "invocation": "git clone (NUNCA embutir — licença)" },
+    "com.freerdp.FreeRDP (flatpak)": { "version": "3.27+ (Flathub)", "type": "optional", "used_by": ["scripts/setup-host-excel.sh"], "invocation": "flatpak run (contorna bug RAIL do freerdp3-x11 3.5.1)" },
+    "cloud-images.ubuntu.com": { "version": "noble (URLs hardcoded)", "type": "production", "used_by": ["src-tauri/src/core/cloud_init.rs"], "invocation": "curl em runtime (SHA256 verificado)" }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "_meta": { "updated_at": "2026-07-08T14:39:06Z", "version": 1 },
+  "languages": ["Rust", "JavaScript", "CSS", "Bash", "PowerShell"],
+  "frameworks": ["Tauri 2", "clap 4"],
+  "tools": ["cargo fmt", "cargo clippy (-D warnings)", "GitHub Actions", "WebdriverIO", "tauri-driver", "include_dir (assets embutidos)"],
+  "build_system": "cargo + npm scripts (tauri build)",
+  "test_framework": "cargo test (inline #[cfg(test)], 108 testes) + node:test (frontend puro) + WebdriverIO E2E (inoperante)",
+  "package_manager": "npm (frontend/tooling) + cargo (backend)",
+  "content_formats": ["Markdown (docs/rules)", "YAML (compose gerado em runtime)", "JSON (tauri.conf, capabilities)", "PowerShell bundles (.ps1)", "cloud-config YAML (gerado)"]
+}
