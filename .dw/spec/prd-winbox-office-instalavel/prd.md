@@ -619,14 +619,15 @@ Constitution Alignment: no applicable principle: processo de release/GTM — con
 
 ## Questões em Aberto
 
-- **Mecanismo de recrutamento do beta guiado:** escolher entre GitHub Discussions, posts nas
-  comunidades WinApps/dockur ou lista de espera própria. Recomendação: começar por GitHub
-  Discussions + posts nas comunidades já decididas.
-- **Destino e retenção da telemetria opt-in:** definir backend ou formato de coleta antes do beta.
-  Recomendação: usar coleta mínima por release/beta com retenção curta e export simples para análise.
-- **Critério público de "beta pronto":** definir o mínimo de falhas aceitáveis antes do release.
-  Recomendação: exigir 3 provisionamentos limpos em VM nova e 2 adoções de setup existente antes de
-  publicar o beta.
+Nenhuma. As 3 questões do draft foram resolvidas pelo dono em 2026-07-08, adotando as
+recomendações:
+
+- **Mecanismo de recrutamento do beta guiado (resolvida):** GitHub Discussions + posts nas
+  comunidades WinApps/dockur.
+- **Destino e retenção da telemetria opt-in (resolvida):** coleta mínima por release/beta, com
+  retenção curta e export simples para análise; o mecanismo/backend concreto é decisão do TechSpec.
+- **Critério público de "beta pronto" (resolvida):** 3 provisionamentos limpos em VM nova + 2
+  adoções de setup existente antes de publicar o beta.
 
 ## Related ADRs
 
