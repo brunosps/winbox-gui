@@ -15,6 +15,7 @@ pub mod host;
 pub mod image_family;
 pub mod launch_error;
 pub mod oem;
+pub mod office_preflight;
 pub mod office_state;
 pub mod opener;
 pub mod paths;

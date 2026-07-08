@@ -34,6 +34,9 @@ pub struct PullEvent {
 /// Lower-level operations stay on `anyhow::Result` to keep the trait
 /// from leaking launch-specific semantics into housekeeping calls.
 pub trait DockerClient {
+    fn docker_binary_available(&self) -> bool;
+    fn docker_daemon_available(&self) -> bool;
+    fn docker_compose_available(&self) -> bool;
     fn container_status(&self, name: &str) -> String;
     fn compose_run(
         &self,
@@ -66,6 +69,37 @@ pub trait DockerClient {
 pub struct CliDocker;
 
 impl DockerClient for CliDocker {
+    fn docker_binary_available(&self) -> bool {
+        which::which("docker").is_ok()
+    }
+
+    fn docker_daemon_available(&self) -> bool {
+        Command::new("docker")
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn docker_compose_available(&self) -> bool {
+        Command::new("docker")
+            .args(["compose", "version"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+            || Command::new("docker-compose")
+                .arg("version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+    }
+
     fn container_status(&self, name: &str) -> String {
         let out = Command::new("docker")
             .args([
@@ -645,6 +679,9 @@ pub mod mock {
         pub calls: RefCell<Vec<String>>,
         pub fail_compose: RefCell<Option<LaunchError>>,
         pub fail_pull: RefCell<Option<LaunchError>>,
+        pub docker_binary_available: RefCell<bool>,
+        pub docker_daemon_available: RefCell<bool>,
+        pub docker_compose_available: RefCell<bool>,
     }
 
     impl MockDocker {
@@ -664,6 +701,16 @@ pub mod mock {
         pub fn set_compose_failure(&self, err: LaunchError) {
             *self.fail_compose.borrow_mut() = Some(err);
         }
+        pub fn seed_preflight(
+            &self,
+            docker_binary: bool,
+            docker_daemon: bool,
+            docker_compose: bool,
+        ) {
+            *self.docker_binary_available.borrow_mut() = docker_binary;
+            *self.docker_daemon_available.borrow_mut() = docker_daemon;
+            *self.docker_compose_available.borrow_mut() = docker_compose;
+        }
         pub fn calls(&self) -> Vec<String> {
             self.calls.borrow().clone()
         }
@@ -673,6 +720,21 @@ pub mod mock {
     }
 
     impl DockerClient for MockDocker {
+        fn docker_binary_available(&self) -> bool {
+            self.record("preflight", "docker_binary");
+            *self.docker_binary_available.borrow()
+        }
+
+        fn docker_daemon_available(&self) -> bool {
+            self.record("preflight", "docker_daemon");
+            *self.docker_daemon_available.borrow()
+        }
+
+        fn docker_compose_available(&self) -> bool {
+            self.record("preflight", "docker_compose");
+            *self.docker_compose_available.borrow()
+        }
+
         fn container_status(&self, name: &str) -> String {
             self.record("status", name);
             self.statuses
