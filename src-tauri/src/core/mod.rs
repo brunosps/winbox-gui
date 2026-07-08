@@ -10,6 +10,7 @@ pub mod flatpak;
 pub mod gpu;
 pub mod gpu_bind;
 pub mod gpu_hooks;
+pub mod guest_executor;
 pub mod health;
 pub mod health_wsl;
 pub mod host;

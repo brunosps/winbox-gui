@@ -407,6 +407,19 @@ impl OfficeProvisioningState {
         self.phases.get(&phase).map(|state| state.status)
     }
 
+    pub fn ensure_remoteapp_ready_for_guest_phase(&self, phase: OfficePhase) -> Result<()> {
+        if !phase_requires_remoteapp(phase) {
+            return Ok(());
+        }
+        if self.phase_status(OfficePhase::RemoteappPrepare) == Some(PhaseStatus::Done) {
+            return Ok(());
+        }
+        bail!(
+            "A fase '{}' exige remoteapp_prepare concluída antes de usar o executor guest.",
+            phase
+        )
+    }
+
     fn complete_phase(
         &mut self,
         phase: OfficePhase,
@@ -484,6 +497,16 @@ pub fn descendants_of(phase: OfficePhase) -> Vec<OfficePhase> {
     let mut seen = BTreeSet::new();
     collect_descendants(phase, &mut seen, &mut out);
     out
+}
+
+pub fn phase_requires_remoteapp(phase: OfficePhase) -> bool {
+    matches!(
+        phase,
+        OfficePhase::OfficeStageOdt
+            | OfficePhase::OfficeInstall
+            | OfficePhase::WinappsConfig
+            | OfficePhase::FinalVerify
+    )
 }
 
 fn collect_descendants(
@@ -653,6 +676,32 @@ mod tests {
             .expect_err("done phase needs explicit retry");
 
         assert!(format!("{err:#}").contains("use retry explícito"));
+    }
+
+    #[test]
+    fn remoteapp_prepare_precedes_guest_executor_phases() {
+        let mut state = OfficeProvisioningState::new("office");
+
+        let err = state
+            .ensure_remoteapp_ready_for_guest_phase(OfficePhase::OfficeInstall)
+            .expect_err("guest executor phase should require RemoteApp first");
+
+        assert!(format!("{err:#}").contains("remoteapp_prepare"));
+        assert!(!phase_requires_remoteapp(OfficePhase::WindowsInstall));
+        assert!(phase_requires_remoteapp(OfficePhase::OfficeInstall));
+        assert!(direct_dependencies()
+            .contains(&(OfficePhase::RemoteappPrepare, OfficePhase::OfficeStageOdt)));
+
+        state
+            .mark_phase_running(OfficePhase::RemoteappPrepare)
+            .expect("remoteapp_prepare should run");
+        state
+            .mark_phase_done(OfficePhase::RemoteappPrepare, None)
+            .expect("remoteapp_prepare should finish");
+
+        state
+            .ensure_remoteapp_ready_for_guest_phase(OfficePhase::OfficeInstall)
+            .expect("done remoteapp_prepare should unlock guest executor phases");
     }
 
     fn sample_evidence(phase: OfficePhase) -> PhaseEvidence {

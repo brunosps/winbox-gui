@@ -63,7 +63,7 @@ feat/prd-winbox-office-instalavel
 - [x] 4.0 Implementar preflight base com erros acionáveis
 - [x] 5.0 Detectar FreeRDP nativo/Flatpak e preparar fallback
 - [x] 6.0 Detectar recursos insuficientes e conflitos de subnet
-- [ ] 7.0 Preparar RemoteApp antes do executor guest
+- [x] 7.0 Preparar RemoteApp antes do executor guest
 - [ ] 8.0 Gerar staging ODT, XML e integridade do instalador
 - [ ] 9.0 Executar instalação Office no guest e verificar readiness
 - [ ] 10.0 Expor OfficeError, comandos Tauri e progresso estruturado
