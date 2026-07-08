@@ -62,6 +62,9 @@ nesta fase (a integração share-do-mount/"Abrir com Excel" é a fase 2, PRD pr�
   claramente o que preciso ter (KVM, RAM, disco, licenças) antes de começar.
 - Como usuário, ao fim do wizard eu abro Excel/Word pelo menu do sistema como apps normais.
 - Como usuário, eu vejo o estado da VM (rodando/parada/recursos) e ligo/desligo pelo winbox.
+- Como usuário, ao abrir um app Office com a VM desligada, a VM **liga sozinha** (ou recebo
+  um aviso amigável "A VM está desligada — [Ligar agora]") em vez do erro técnico de porta RDP
+  fechada do WinApps (caso real: 08/jul, toast "port 3389 is closed" com a VM parada).
 
 ## Not Doing (explícito)
 
@@ -74,6 +77,7 @@ nesta fase (a integração share-do-mount/"Abrir com Excel" é a fase 2, PRD pr�
 
 ## Key Assumptions to Validate
 
+- **RAM_SIZE do perfil precisa respeitar o host** (caso real: perfil com 12 GB num host com 7,2 GB livres → dockur auto-ajusta; o wizard deve dimensionar pelo diagnóstico) — teste: wizard em host de 8 GB.
 - **Usuário aceita provisionar ~30-60 min + 4 GiB RAM + 64 GB disco** — teste: instrumentar o
   wizard com telemetria opt-in de conclusão/abandono num beta com 5-10 usuários.
 - **Instalação não-assistida do Office dentro da VM é confiável** (ODT/config XML via bundle PS)
