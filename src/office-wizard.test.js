@@ -381,6 +381,30 @@ test("release_workflow_generates_sha256sums", () => {
   assert.doesNotMatch(workflow, /docker-ce|freerdp3-x11|flatpak install/i);
 });
 
+test("office_coverage_jobs_measure_new_modules", () => {
+  const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+
+  assert.match(workflow, /cargo install cargo-llvm-cov --locked/);
+  assert.match(workflow, /cargo llvm-cov --manifest-path src-tauri\/Cargo\.toml --all-targets/);
+  assert.match(workflow, /src-tauri\/src\/core\/office_state\.rs/);
+  assert.match(workflow, /src-tauri\/src\/core\/office_odt\.rs/);
+  assert.match(workflow, /src-tauri\/src\/core\/office_preflight\.rs/);
+  assert.match(workflow, /src-tauri\/src\/commands\/office\.rs/);
+  assert.match(workflow, /node --test --experimental-test-coverage src\/office-wizard\.test\.js/);
+});
+
+test("office_beta_release_gate_includes_upgrade_scenario", () => {
+  const checklist = readFileSync("tests/e2e/office-beta-readiness.md", "utf8");
+
+  assert.match(checklist, /office_real_vm_beta_readiness/);
+  assert.match(checklist, /FR-1\.4/);
+  assert.match(checklist, /FR-8\.4/);
+  assert.match(checklist, /3 provisionamentos limpos/);
+  assert.match(checklist, /2 adoc(?:o|õ)es/);
+  assert.match(checklist, /upgrade preservado/);
+  assert.match(checklist, /Coolify/);
+});
+
 test("preflight_blocker_renders_action_hint_escaped", () => {
   const state = initialOfficeWizardState({
     step: "preflight",

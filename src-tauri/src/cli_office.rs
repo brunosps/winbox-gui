@@ -497,6 +497,138 @@ mod tests {
     use super::*;
 
     #[test]
+    fn office_contract_suite_preserves_public_shapes() {
+        const EXPECTED_OFFICE_CODES: &[&str] = &[
+            "byol_not_accepted",
+            "preflight_kvm_missing",
+            "preflight_docker_missing",
+            "preflight_subnet_conflict",
+            "flatpak_freerdp_missing",
+            "flatpak_home_override_missing",
+            "native_freerdp_too_old",
+            "office_product_invalid",
+            "profile_not_office",
+            "profile_state_conflict",
+            "guest_remoteapp_not_prepared",
+            "guest_rdp_unreachable",
+            "guest_executor_failed",
+            "guest_phase_timeout",
+            "guest_disk_full",
+            "office_windows_failed",
+            "office_odt_stage_failed",
+            "office_odt_failed",
+            "office_detection_failed",
+            "winapps_clone_failed",
+            "winapps_no_config",
+            "winapps_missing_deps",
+            "winapps_bad_port",
+            "winapps_rdp_failed",
+            "winapps_app_scan_failed",
+            "winapps_pin_mismatch",
+            "desktop_registration_failed",
+            "file_association_failed",
+            "app_not_registered",
+            "app_launch_failed",
+            "file_outside_home",
+            "office_apps_maybe_open",
+            "remove_requires_confirmation",
+        ];
+        assert_eq!(OfficeError::all_codes(), EXPECTED_OFFICE_CODES);
+
+        for code in EXPECTED_OFFICE_CODES {
+            let error = OfficeError::new(
+                code,
+                OfficePhase::OfficeInstall,
+                true,
+                Some(json!({ "contract": "office_contract_suite_preserves_public_shapes" })),
+            );
+            let serialized = serde_json::to_value(&error).expect("OfficeError should serialize");
+            assert_eq!(serialized["code"], *code);
+            assert_eq!(serialized["phase"], "office_install");
+            assert_eq!(serialized["retryable"], true);
+        }
+
+        let (exit, out) = run_cli(
+            OfficeArgs {
+                command: OfficeSubcommand::Remove {
+                    profile: "office-contract".to_string(),
+                    delete_disk: false,
+                    confirm: None,
+                },
+            },
+            OutputMode::Json,
+        );
+        let envelope = last_json_line(&out);
+        assert_eq!(exit, 1);
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(
+            envelope["error"]["code"],
+            OfficeError::REMOVE_REQUIRES_CONFIRMATION
+        );
+        assert_eq!(envelope["error"]["phase"], "first_launch");
+        assert_eq!(envelope["error"]["retryable"], false);
+        assert!(envelope.get("value").is_none());
+        assert_ne!(envelope["error"]["code"], "operation_failed");
+
+        let (exit, progress_out) = run_cli(
+            OfficeArgs {
+                command: OfficeSubcommand::Provision {
+                    profile: "office-contract".to_string(),
+                    product_id: "O365ProPlusRetail".to_string(),
+                    language: "pt-br".to_string(),
+                    byol_accepted: false,
+                    telemetry_opt_in: None,
+                    adoption_id: None,
+                    progress: Some(ProgressFormat::Jsonl),
+                    resources: ResourceArgs {
+                        ram_gb: 8,
+                        cpu_cores: 4,
+                        disk_gb: 128,
+                        storage_path: None,
+                        warning_override: false,
+                    },
+                },
+            },
+            OutputMode::Json,
+        );
+        let lines = json_lines(&progress_out);
+        let progress = lines
+            .iter()
+            .find(|line| line["type"] == "progress" && line["status"] == "error")
+            .expect("progress jsonl should include an error progress record");
+        let mut progress_keys = progress
+            .as_object()
+            .expect("progress record should be an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        progress_keys.sort_unstable();
+
+        assert_eq!(exit, 1);
+        assert_eq!(
+            progress_keys,
+            [
+                "message",
+                "operation",
+                "phase",
+                "profile",
+                "status",
+                "timestamp",
+                "type"
+            ]
+        );
+        assert_eq!(progress["profile"], "office-contract");
+        assert_eq!(progress["operation"], "office_provision");
+        assert_eq!(progress["phase"], "byol_acceptance");
+        assert_eq!(progress["status"], "error");
+        assert!(progress["timestamp"].as_str().is_some());
+        assert_eq!(
+            lines.last().expect("json envelope should be last")["error"]["code"],
+            OfficeError::BYOL_NOT_ACCEPTED
+        );
+    }
+
+    #[test]
     fn office_json_error_envelope_preserves_office_error_code() {
         let (exit, out) = run_cli(
             OfficeArgs {
