@@ -1224,6 +1224,96 @@ textarea.field-input {
   font-weight: 650;
 }
 
+.office-wizard-preflight-list,
+.office-wizard-adoption-findings,
+.office-wizard-scope-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.office-wizard-preflight-check,
+.office-wizard-adoption-finding,
+.office-wizard-warning-override,
+.office-wizard-adoption {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.office-wizard-preflight-check > div,
+.office-wizard-adoption-finding > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.office-wizard-preflight-check p,
+.office-wizard-adoption-finding p,
+.office-wizard-warning-override p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.office-wizard-action-hint {
+  color: var(--title) !important;
+  font-weight: 650;
+}
+
+.office-wizard-preflight-check span,
+.office-wizard-adoption-finding span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.office-wizard-preflight-check[data-status="ok"] {
+  border-color: var(--ok);
+}
+
+.office-wizard-preflight-check[data-status="warning"],
+.office-wizard-warning-override {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.office-wizard-preflight-check[data-status="blocker"],
+.office-wizard-adoption-finding[data-status="unsafe"] {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.office-wizard-scope-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.office-wizard-scope-grid div {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.office-wizard-scope-grid ul,
+.office-wizard-disclaimer {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.office-wizard-scope-grid li,
+.office-wizard-disclaimer li {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+
 .office-wizard-phases {
   display: grid;
   gap: 8px;
@@ -1975,7 +2065,8 @@ pre {
 
   .office-wizard-grid,
   .office-wizard-fields,
-  .office-wizard-summary {
+  .office-wizard-summary,
+  .office-wizard-scope-grid {
     grid-template-columns: 1fr;
   }
 

@@ -30,6 +30,14 @@ const BYOL_DISCLAIMER_KEYS = [
   "officeWizard.byol.item.eula",
 ];
 
+const MANAGED_SCOPE_KEYS = [
+  ["manageProfileConfig", "officeWizard.adoption.scope.profileConfig"],
+  ["manageWinAppsConf", "officeWizard.adoption.scope.winappsConf"],
+  ["manageDesktopEntries", "officeWizard.adoption.scope.desktopEntries"],
+  ["manageFileAssociations", "officeWizard.adoption.scope.fileAssociations"],
+  ["manageDiskLifecycle", "officeWizard.adoption.scope.diskLifecycle"],
+];
+
 export function initialOfficeWizardState(overrides = {}) {
   return {
     step: "intro",
@@ -38,6 +46,10 @@ export function initialOfficeWizardState(overrides = {}) {
     language: "pt-br",
     byolAccepted: false,
     warningOverride: false,
+    adoptionConfirmed: false,
+    preflightChecks: [],
+    adoptionCandidates: [],
+    managedScope: {},
     status: "default",
     errorCode: "",
     phaseStatuses: { ...DEFAULT_PHASE_STATUSES },
@@ -45,6 +57,9 @@ export function initialOfficeWizardState(overrides = {}) {
     phaseStatuses: {
       ...DEFAULT_PHASE_STATUSES,
       ...(overrides.phaseStatuses || {}),
+    },
+    managedScope: {
+      ...(overrides.managedScope || {}),
     },
   };
 }
@@ -65,6 +80,26 @@ export function officeWizardReducer(state, action = {}) {
       };
     }
     return { ...current, [action.field]: action.value };
+  }
+  if (action.type === "set_preflight_result") {
+    const result = action.result || {};
+    const checks = Array.isArray(result.checks) ? result.checks : [];
+    return {
+      ...current,
+      status: "success",
+      errorCode: "",
+      preflightChecks: checks,
+      adoptionCandidates: Array.isArray(result.adoptionCandidates)
+        ? result.adoptionCandidates
+        : [],
+      managedScope: result.managedScope || current.managedScope,
+      warningOverride: false,
+      adoptionConfirmed: false,
+      phaseStatuses: {
+        ...current.phaseStatuses,
+        preflight: result.blockers > 0 || checks.some(check => preflightStatus(check) === "blocker") ? "failed" : "done",
+      },
+    };
   }
   if (action.type === "next") {
     if (current.step === "license" && !canStartProvisioning(current)) {
@@ -99,6 +134,17 @@ export function officeWizardReducer(state, action = {}) {
 
 export function canStartProvisioning(state) {
   return initialOfficeWizardState(state).byolAccepted === true;
+}
+
+export function canContinueFromPreflight(state) {
+  const current = initialOfficeWizardState(state);
+  const checks = preflightChecks(current);
+  if (checks.some(check => preflightStatus(check) === "blocker")) return false;
+  if (checks.some(check => preflightStatus(check) === "warning") && !current.warningOverride) {
+    return false;
+  }
+  if (adoptionCandidates(current).length > 0 && !current.adoptionConfirmed) return false;
+  return true;
 }
 
 export function officeWizardPhaseLabel(phase, { t }) {
@@ -138,9 +184,18 @@ export function officeWizardCta(state, { t }) {
         reason: t("officeWizard.validation.byol"),
       };
     }
+    const reason = preflightBlockReason(current, { t });
+    if (reason) {
+      return {
+        action: "start",
+        label: t(preflightHasResult(current) ? "officeWizard.cta.continueProvisioning" : "officeWizard.cta.startPreflight"),
+        disabled: true,
+        reason,
+      };
+    }
     return {
       action: "start",
-      label: t("officeWizard.cta.startPreflight"),
+      label: t(preflightHasResult(current) ? "officeWizard.cta.continueProvisioning" : "officeWizard.cta.startPreflight"),
       disabled: false,
     };
   }
@@ -219,8 +274,12 @@ export function bindOfficeWizard(root, deps = {}) {
     const action = control.dataset.officeWizardAction;
     if (action === "close") return onClose();
     if (action === "start") {
-      if (!canStartProvisioning(getState())) {
+      const state = getState();
+      if (!canStartProvisioning(state)) {
         return dispatch({ type: "set_status", status: "error", errorCode: "byol_not_accepted" });
+      }
+      if (!canContinueFromPreflight(state)) {
+        return dispatch({ type: "set_status", status: "error", errorCode: "preflight_blocked" });
       }
       return onStart();
     }
@@ -250,8 +309,12 @@ export function bindOfficeWizard(root, deps = {}) {
 
 function stateFromControls(root) {
   const byol = root.querySelector?.('[data-office-wizard-field="byolAccepted"]');
+  const warning = root.querySelector?.('[data-office-wizard-field="warningOverride"]');
+  const adoption = root.querySelector?.('[data-office-wizard-field="adoptionConfirmed"]');
   return initialOfficeWizardState({
     byolAccepted: Boolean(byol?.checked),
+    warningOverride: Boolean(warning?.checked),
+    adoptionConfirmed: Boolean(adoption?.checked),
   });
 }
 
@@ -293,12 +356,7 @@ function renderCurrentStep(state, deps) {
     return renderByolStep(state, deps);
   }
   if (state.step === "preflight") {
-    return `
-      <div class="office-wizard-copy">
-        <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.preflight.title"))}</h3>
-        <p>${escapeHtml(t("officeWizard.preflight.desc"))}</p>
-      </div>
-      <div class="office-wizard-callout" data-tone="warn">${escapeHtml(t("officeWizard.preflight.duration"))}</div>`;
+    return renderPreflightStep(state, deps);
   }
   return `
     <div class="office-wizard-copy">
@@ -309,6 +367,72 @@ function renderCurrentStep(state, deps) {
       <div><span>${escapeHtml(t("officeWizard.summary.profile"))}</span><strong>${escapeHtml(state.profileName)}</strong></div>
       <div><span>${escapeHtml(t("officeWizard.summary.office"))}</span><strong>${escapeHtml(state.productId)}</strong></div>
     </div>`;
+}
+
+export function renderPreflightStep(state, deps) {
+  const { t, escapeHtml, escapeAttr } = deps;
+  const current = initialOfficeWizardState(state);
+  const checks = preflightChecks(current);
+  const blockers = checks.filter(check => preflightStatus(check) === "blocker");
+  const warnings = checks.filter(check => preflightStatus(check) === "warning");
+  const loading = current.status === "loading"
+    ? `<div class="office-wizard-callout" data-tone="info" aria-live="polite">${escapeHtml(t("officeWizard.preflight.loading"))}</div>`
+    : "";
+  const error = current.status === "error" && current.errorCode === "preflight_blocked"
+    ? `<div class="office-wizard-callout" data-tone="danger" role="alert">${escapeHtml(t("officeWizard.preflight.blocked"))}</div>`
+    : "";
+  const checkList = checks.length
+    ? `<div class="office-wizard-preflight-list" aria-label="${escapeAttr(t("officeWizard.preflight.checksLabel"))}">
+        ${checks.map(check => renderPreflightCheck(check, deps)).join("")}
+      </div>`
+    : `<div class="office-wizard-callout" data-tone="warn">${escapeHtml(t("officeWizard.preflight.duration"))}</div>`;
+  const override = warnings.length && !blockers.length
+    ? renderWarningOverride(current, warnings, deps)
+    : "";
+
+  return `
+    <div class="office-wizard-copy">
+      <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.preflight.title"))}</h3>
+      <p>${escapeHtml(t("officeWizard.preflight.desc"))}</p>
+    </div>
+    ${loading}
+    ${error}
+    ${checkList}
+    ${override}
+    ${renderAdoptionReview(current, deps)}`;
+}
+
+export function renderAdoptionReview(state, deps) {
+  const { t, escapeHtml, escapeAttr } = deps;
+  const current = initialOfficeWizardState(state);
+  const candidates = adoptionCandidates(current);
+  if (!candidates.length) return "";
+  const managed = managedScopeItems(current, true, deps);
+  const preserved = managedScopeItems(current, false, deps);
+  return `
+    <section class="office-wizard-adoption" aria-label="${escapeAttr(t("officeWizard.adoption.title"))}">
+      <div class="office-wizard-copy">
+        <h3>${escapeHtml(t("officeWizard.adoption.title"))}</h3>
+        <p>${escapeHtml(t("officeWizard.adoption.desc"))}</p>
+      </div>
+      <div class="office-wizard-adoption-findings">
+        ${candidates.map(candidate => renderAdoptionFinding(candidate, deps)).join("")}
+      </div>
+      <div class="office-wizard-scope-grid">
+        <div>
+          <strong>${escapeHtml(t("officeWizard.adoption.managed"))}</strong>
+          <ul>${managed}</ul>
+        </div>
+        <div>
+          <strong>${escapeHtml(t("officeWizard.adoption.preserved"))}</strong>
+          <ul>${preserved}</ul>
+        </div>
+      </div>
+      <label class="office-wizard-check">
+        <input type="checkbox" data-office-wizard-field="adoptionConfirmed" ${current.adoptionConfirmed ? "checked" : ""} />
+        <span>${escapeHtml(t("officeWizard.adoption.confirm"))}</span>
+      </label>
+    </section>`;
 }
 
 export function renderByolStep(state, deps) {
@@ -362,6 +486,89 @@ function renderPhaseList(state, deps) {
           </li>`;
       }).join("")}
     </ol>`;
+}
+
+function renderPreflightCheck(check, { t, escapeHtml, escapeAttr }) {
+  const status = preflightStatus(check);
+  const actionHint = check.action_hint || check.actionHint || "";
+  const role = status === "blocker" ? " role=\"alert\"" : "";
+  return `
+    <article class="office-wizard-preflight-check" data-status="${escapeAttr(status)}"${role}>
+      <div>
+        <strong>${escapeHtml(check.requirement || check.id || t("officeWizard.preflight.unknownRequirement"))}</strong>
+        <span>${escapeHtml(t(`officeWizard.preflight.status.${status}`))}</span>
+      </div>
+      <p>${escapeHtml(check.impact || t("officeWizard.preflight.noImpact"))}</p>
+      ${actionHint ? `<p class="office-wizard-action-hint">${escapeHtml(actionHint)}</p>` : ""}
+    </article>`;
+}
+
+function renderWarningOverride(state, warnings, { t, escapeHtml }) {
+  return `
+    <div class="office-wizard-warning-override" role="group" aria-label="${escapeHtml(t("officeWizard.warningOverride.title"))}">
+      <strong>${escapeHtml(t("officeWizard.warningOverride.title"))}</strong>
+      <p>${escapeHtml(t("officeWizard.warningOverride.desc", { count: warnings.length }))}</p>
+      <label class="office-wizard-check">
+        <input type="checkbox" data-office-wizard-field="warningOverride" ${state.warningOverride ? "checked" : ""} />
+        <span>${escapeHtml(t("officeWizard.warningOverride.confirm"))}</span>
+      </label>
+    </div>`;
+}
+
+function renderAdoptionFinding(candidate, { t, escapeHtml, escapeAttr }) {
+  const status = String(candidate.status || "partial");
+  return `
+    <article class="office-wizard-adoption-finding" data-status="${escapeAttr(status)}">
+      <div>
+        <strong>${escapeHtml(candidate.kind || candidate.id || t("officeWizard.adoption.unknown"))}</strong>
+        <span>${escapeHtml(t(`officeWizard.adoption.status.${status}`))}</span>
+      </div>
+      <p>${escapeHtml(candidate.evidence || "")}</p>
+      <small>${escapeHtml(candidate.managedByDefault ? t("officeWizard.adoption.defaultManaged") : t("officeWizard.adoption.defaultPreserved"))}</small>
+    </article>`;
+}
+
+function managedScopeItems(state, managed, { t, escapeHtml }) {
+  const items = MANAGED_SCOPE_KEYS
+    .filter(([key]) => Boolean(state.managedScope?.[key]) === managed)
+    .map(([, labelKey]) => `<li>${escapeHtml(t(labelKey))}</li>`);
+  if (state.managedScope?.preserveExistingWinAppsClone === !managed) {
+    items.push(`<li>${escapeHtml(t("officeWizard.adoption.scope.winappsClone"))}</li>`);
+  }
+  return items.length ? items.join("") : `<li>${escapeHtml(t("officeWizard.adoption.none"))}</li>`;
+}
+
+function preflightChecks(state) {
+  return Array.isArray(state.preflightChecks) ? state.preflightChecks : [];
+}
+
+function adoptionCandidates(state) {
+  return Array.isArray(state.adoptionCandidates) ? state.adoptionCandidates : [];
+}
+
+function preflightStatus(check) {
+  const status = String(check?.status || "ok").toLowerCase();
+  if (status === "warn") return "warning";
+  if (["ok", "warning", "blocker"].includes(status)) return status;
+  return "blocker";
+}
+
+function preflightHasResult(state) {
+  return preflightChecks(state).length > 0 || adoptionCandidates(state).length > 0;
+}
+
+function preflightBlockReason(state, { t }) {
+  const checks = preflightChecks(state);
+  if (checks.some(check => preflightStatus(check) === "blocker")) {
+    return t("officeWizard.preflight.reason.blocker");
+  }
+  if (checks.some(check => preflightStatus(check) === "warning") && !state.warningOverride) {
+    return t("officeWizard.preflight.reason.warning");
+  }
+  if (adoptionCandidates(state).length > 0 && !state.adoptionConfirmed) {
+    return t("officeWizard.preflight.reason.adoption");
+  }
+  return "";
 }
 
 function option(value, selected, label, { escapeHtml, escapeAttr }) {

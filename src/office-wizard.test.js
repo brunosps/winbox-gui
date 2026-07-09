@@ -4,11 +4,14 @@ import { readFileSync } from "node:fs";
 import {
   bindOfficeWizard,
   canStartProvisioning,
+  canContinueFromPreflight,
   initialOfficeWizardState,
   officeWizardCta,
   officeWizardReducer,
+  renderAdoptionReview,
   renderByolStep,
   renderOfficeWizard,
+  renderPreflightStep,
 } from "./office-wizard.js";
 import { escapeAttr, escapeHtml } from "./dom-utils.js";
 
@@ -40,6 +43,38 @@ const dict = {
   "officeWizard.preflight.title": "Pre-flight",
   "officeWizard.preflight.desc": "Check host requirements before provisioning.",
   "officeWizard.preflight.duration": "Provisioning can take around 45 minutes.",
+  "officeWizard.preflight.loading": "Checking host.",
+  "officeWizard.preflight.blocked": "Resolve blockers before provisioning.",
+  "officeWizard.preflight.checksLabel": "Pre-flight checks",
+  "officeWizard.preflight.unknownRequirement": "Unknown requirement",
+  "officeWizard.preflight.noImpact": "Impact unavailable.",
+  "officeWizard.preflight.status.ok": "OK",
+  "officeWizard.preflight.status.warning": "Warning",
+  "officeWizard.preflight.status.blocker": "Blocker",
+  "officeWizard.preflight.reason.blocker": "Resolve blockers first.",
+  "officeWizard.preflight.reason.warning": "Confirm warnings to continue.",
+  "officeWizard.preflight.reason.adoption": "Review adoption before continuing.",
+  "officeWizard.warningOverride.title": "Resource warning",
+  "officeWizard.warningOverride.desc": "{count} warning(s) can reduce reliability.",
+  "officeWizard.warningOverride.confirm": "Continue with these warnings.",
+  "officeWizard.adoption.title": "Adopt existing setup",
+  "officeWizard.adoption.desc": "Review what winbox will manage.",
+  "officeWizard.adoption.managed": "Managed by winbox",
+  "officeWizard.adoption.preserved": "Preserved",
+  "officeWizard.adoption.confirm": "Adopt this setup with the scope shown.",
+  "officeWizard.adoption.unknown": "Detected item",
+  "officeWizard.adoption.none": "None",
+  "officeWizard.adoption.defaultManaged": "Managed by default",
+  "officeWizard.adoption.defaultPreserved": "Preserved by default",
+  "officeWizard.adoption.status.compatible": "Compatible",
+  "officeWizard.adoption.status.partial": "Partial",
+  "officeWizard.adoption.status.unsafe": "Unsafe",
+  "officeWizard.adoption.scope.profileConfig": "Profile config",
+  "officeWizard.adoption.scope.winappsConf": "WinApps config",
+  "officeWizard.adoption.scope.desktopEntries": "Desktop entries",
+  "officeWizard.adoption.scope.fileAssociations": "File associations",
+  "officeWizard.adoption.scope.diskLifecycle": "Disk lifecycle",
+  "officeWizard.adoption.scope.winappsClone": "Existing WinApps clone",
   "officeWizard.field.profileName": "Profile name",
   "officeWizard.field.language": "Office language",
   "officeWizard.language.ptBr": "Portuguese (Brazil)",
@@ -182,6 +217,98 @@ test("renderByolStep_shows_required_disclaimer_and_alert_states", () => {
   assert.doesNotMatch(html, /<script/);
 });
 
+test("preflight_blocker_renders_action_hint_escaped", () => {
+  const state = initialOfficeWizardState({
+    step: "preflight",
+    byolAccepted: true,
+    preflightChecks: [
+      {
+        id: "preflight_kvm_missing",
+        status: "blocker",
+        requirement: "KVM <required>",
+        impact: "Office VM cannot boot <script>alert(1)</script>",
+        action_hint: "Run sudo usermod -aG kvm $USER && reboot <b>now</b>",
+      },
+    ],
+  });
+
+  const html = renderPreflightStep(state, deps);
+
+  assert.match(html, /role="alert"/);
+  assert.match(html, /KVM &lt;required&gt;/);
+  assert.match(html, /Office VM cannot boot &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;b&gt;now&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<script>alert/);
+});
+
+test("resource_warning_requires_ui_override", () => {
+  const warningState = initialOfficeWizardState({
+    step: "preflight",
+    byolAccepted: true,
+    preflightChecks: [
+      {
+        id: "resource_ram_recommended",
+        status: "warning",
+        requirement: "8 GB RAM recommended",
+        impact: "Office install can be slow.",
+        action_hint: "Increase RAM or confirm override.",
+      },
+    ],
+  });
+
+  assert.equal(canContinueFromPreflight(warningState), false);
+  assert.equal(officeWizardCta(warningState, deps).disabled, true);
+  assert.match(renderPreflightStep(warningState, deps), /data-office-wizard-field="warningOverride"/);
+
+  const accepted = officeWizardReducer(warningState, {
+    type: "field",
+    field: "warningOverride",
+    value: true,
+  });
+  assert.equal(canContinueFromPreflight(accepted), true);
+  assert.equal(officeWizardCta(accepted, deps).disabled, false);
+});
+
+test("adoption_review_requires_explicit_choice", () => {
+  const state = initialOfficeWizardState({
+    step: "preflight",
+    byolAccepted: true,
+    preflightChecks: [],
+    adoptionCandidates: [
+      {
+        id: "winapps_conf",
+        kind: "winapps_conf",
+        status: "compatible",
+        evidence: "~/.config/winapps/winapps.conf <kept>",
+        managedByDefault: false,
+      },
+    ],
+    managedScope: {
+      manageProfileConfig: true,
+      manageWinAppsConf: false,
+      manageDesktopEntries: true,
+      manageFileAssociations: true,
+      manageDiskLifecycle: false,
+      preserveExistingWinAppsClone: true,
+    },
+  });
+
+  const html = renderAdoptionReview(state, deps);
+
+  assert.equal(canContinueFromPreflight(state), false);
+  assert.match(html, /data-office-wizard-field="adoptionConfirmed"/);
+  assert.match(html, /~\/.config\/winapps\/winapps.conf &lt;kept&gt;/);
+  assert.match(html, /Profile config/);
+  assert.match(html, /WinApps config/);
+
+  const confirmed = officeWizardReducer(state, {
+    type: "field",
+    field: "adoptionConfirmed",
+    value: true,
+  });
+  assert.equal(canContinueFromPreflight(confirmed), true);
+});
+
 test("office_wizard_initial_state_is_keyboard_reachable", () => {
   const html = renderOfficeWizard(initialOfficeWizardState(), deps);
 
@@ -236,6 +363,24 @@ test("byol_disclaimer_i18n_parallel", () => {
     "officeWizard.byol.item.singleUser",
     "officeWizard.byol.item.eula",
     "officeWizard.byol.error",
+  ];
+
+  for (const key of required) {
+    assert.equal(en.includes(key), true, `${key} missing in en-US`);
+    assert.equal(pt.includes(key), true, `${key} missing in pt-BR`);
+  }
+});
+
+test("preflight_and_adoption_i18n_parallel", () => {
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+  const required = [
+    "officeWizard.preflight.checksLabel",
+    "officeWizard.preflight.reason.warning",
+    "officeWizard.warningOverride.confirm",
+    "officeWizard.adoption.title",
+    "officeWizard.adoption.confirm",
+    "officeWizard.adoption.scope.winappsConf",
   ];
 
   for (const key of required) {
