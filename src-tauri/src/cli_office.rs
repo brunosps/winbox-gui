@@ -144,6 +144,11 @@ fn print_office_result<W: Write>(
     let printed = match (result, mode) {
         (Ok(value), OutputMode::Json) => print_office_json_success(writer, value),
         (Err(error), OutputMode::Json) => print_office_json_error(writer, error),
+        (Err(error), OutputMode::Human)
+            if error.code() == OfficeError::REMOVE_REQUIRES_CONFIRMATION =>
+        {
+            print_remove_confirmation(writer, error)
+        }
         (Err(error), OutputMode::Human) => writeln!(io::stderr(), "✗ {error}"),
         (Ok(_), OutputMode::Human) => Ok(()),
     };
@@ -382,6 +387,32 @@ fn print_human_value<W: Write>(
     writeln!(writer, "{value}").map_err(write_error)
 }
 
+fn print_remove_confirmation<W: Write>(writer: &mut W, error: &OfficeError) -> io::Result<()> {
+    let details = error.fields().details.as_ref();
+    let token = details
+        .and_then(|details| details.get("confirmToken"))
+        .and_then(Value::as_str)
+        .unwrap_or("<token ausente>");
+    let delete_disk = details
+        .and_then(|details| details.get("deleteDisk"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    writeln!(
+        writer,
+        "Remoção do perfil Office exige confirmação explícita."
+    )?;
+    writeln!(writer, "Token: {token}")?;
+    if delete_disk {
+        writeln!(
+            writer,
+            "Esta confirmação também autoriza apagar o disco do perfil."
+        )?;
+    } else {
+        writeln!(writer, "O disco do perfil será preservado.")?;
+    }
+    writeln!(writer, "Execute novamente com --confirm {token}.")
+}
+
 fn office_error_hint(error: &OfficeError) -> String {
     error
         .fields()
@@ -507,6 +538,27 @@ mod tests {
             OfficeError::PROFILE_STATE_CONFLICT
         );
         assert_ne!(envelope["error"]["code"], "operation_failed");
+    }
+
+    #[test]
+    fn office_cli_remove_uses_same_confirmation_flow() {
+        let (exit, out) = run_cli(
+            OfficeArgs {
+                command: OfficeSubcommand::Remove {
+                    profile: "office-cli-token".to_string(),
+                    delete_disk: true,
+                    confirm: None,
+                },
+            },
+            OutputMode::Human,
+        );
+        let text = String::from_utf8(out).expect("human output should be utf8");
+
+        assert_eq!(exit, 1);
+        assert!(text.contains("Remoção do perfil Office exige confirmação explícita."));
+        assert!(text.contains("Token: office-remove:"));
+        assert!(text.contains("Execute novamente com --confirm office-remove:"));
+        assert!(text.contains("apagar o disco do perfil"));
     }
 
     fn run_cli(args: OfficeArgs, mode: OutputMode) -> (i32, Vec<u8>) {

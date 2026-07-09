@@ -222,6 +222,19 @@ pub struct FileAssociationRegistration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DesktopRemoval {
+    pub removed_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAssociationRemoval {
+    pub removed_mime_types: Vec<String>,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FinalVerifyReport {
     pub office_present: bool,
     pub rdp_ready: bool,
@@ -673,6 +686,113 @@ pub fn register_mime_associations(
         )
     })?;
     verify_mime_associations_content(&rendered)
+}
+
+pub fn remove_desktop_files(paths: &[PathBuf]) -> std::result::Result<DesktopRemoval, OfficeError> {
+    let mut removed_files = Vec::new();
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => removed_files.push(path.display().to_string()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(desktop_registration_error(
+                    OfficePhase::FirstLaunch,
+                    path.file_stem()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("office"),
+                    path,
+                    format!("não foi possível remover desktop gerenciado: {err}"),
+                ));
+            }
+        }
+    }
+    Ok(DesktopRemoval { removed_files })
+}
+
+pub fn render_mimeapps_without_office(existing: &str) -> String {
+    let required = required_mime_defaults();
+    let office_desktop_ids = required.values().collect::<Vec<_>>();
+    let mut out = Vec::new();
+    let mut in_default_applications = false;
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_default_applications = trimmed == "[Default Applications]";
+            out.push(line.to_string());
+            continue;
+        }
+        if !in_default_applications || trimmed.starts_with('#') || trimmed.is_empty() {
+            out.push(line.to_string());
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            out.push(line.to_string());
+            continue;
+        };
+        let key = key.trim();
+        if !required.contains_key(key) {
+            out.push(line.to_string());
+            continue;
+        }
+        let remaining = value
+            .split(';')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .filter(|entry| {
+                !office_desktop_ids
+                    .iter()
+                    .any(|desktop_id| *desktop_id == entry)
+            })
+            .collect::<Vec<_>>();
+        if !remaining.is_empty() {
+            out.push(format!("{key}={};", remaining.join(";")));
+        }
+    }
+
+    let mut rendered = out.join("\n");
+    rendered.push('\n');
+    rendered
+}
+
+pub fn remove_mime_associations(
+    mimeapps_path: &Path,
+) -> std::result::Result<FileAssociationRemoval, OfficeError> {
+    let existing = match std::fs::read_to_string(mimeapps_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(file_association_error(
+                OfficePhase::FirstLaunch,
+                format!("não foi possível ler {}: {err}", mimeapps_path.display()),
+            ));
+        }
+    };
+    let rendered = render_mimeapps_without_office(&existing);
+    if let Some(parent) = mimeapps_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            file_association_error(
+                OfficePhase::FirstLaunch,
+                format!("não foi possível criar {}: {err}", parent.display()),
+            )
+        })?;
+    }
+    std::fs::write(mimeapps_path, rendered).map_err(|err| {
+        file_association_error(
+            OfficePhase::FirstLaunch,
+            format!(
+                "não foi possível escrever {}: {err}",
+                mimeapps_path.display()
+            ),
+        )
+    })?;
+    Ok(FileAssociationRemoval {
+        removed_mime_types: OFFICE_MIME_ASSOCIATIONS
+            .iter()
+            .map(|association| association.mime_type.to_string())
+            .collect(),
+        path: mimeapps_path.display().to_string(),
+    })
 }
 
 pub fn verify_mime_associations_content(
@@ -1453,6 +1573,29 @@ mod tests {
         let err = verify_mime_associations_content("[Default Applications]\n")
             .expect_err("missing Office MIME mappings should fail");
         assert_eq!(err.code(), OfficeError::FILE_ASSOCIATION_FAILED);
+    }
+
+    #[test]
+    fn mime_removal_removes_only_office_defaults() {
+        let existing = "\
+[Default Applications]\n\
+application/vnd.ms-excel=excel-o365.desktop;libreoffice-calc.desktop;\n\
+application/vnd.openxmlformats-officedocument.wordprocessingml.document=word-o365.desktop;\n\
+text/plain=code.desktop;\n\
+\n\
+[Added Associations]\n\
+application/vnd.ms-excel=excel-o365.desktop;libreoffice-calc.desktop;\n";
+
+        let rendered = render_mimeapps_without_office(existing);
+
+        assert!(!rendered.contains("word-o365.desktop"));
+        assert!(!rendered
+            .contains("application/vnd.openxmlformats-officedocument.wordprocessingml.document="));
+        assert!(rendered.contains("application/vnd.ms-excel=libreoffice-calc.desktop;\n"));
+        assert!(rendered.contains("text/plain=code.desktop;\n"));
+        assert!(rendered.contains(
+            "[Added Associations]\napplication/vnd.ms-excel=excel-o365.desktop;libreoffice-calc.desktop;\n"
+        ));
     }
 
     #[test]

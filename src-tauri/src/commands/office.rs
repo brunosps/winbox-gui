@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use crate::core::{
     docker::{CliDocker, DockerClient},
@@ -499,26 +500,81 @@ pub fn launch_app_contract(
 pub fn remove_profile_contract(
     args: OfficeRemoveProfileArgs,
 ) -> std::result::Result<OfficeRemoveProfileResponse, OfficeError> {
-    if args
-        .confirm_token
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .is_empty()
-    {
-        return Err(office_error(
-            OfficeError::REMOVE_REQUIRES_CONFIRMATION,
-            OfficePhase::FirstLaunch,
-            false,
-            serde_json::json!({
-                "confirmToken": mint_remove_confirm_token(&args.name, args.delete_disk),
-                "deleteDisk": args.delete_disk,
-            }),
+    remove_profile_with_client(args, &CliWinAppsClient)
+}
+
+fn remove_profile_with_client(
+    args: OfficeRemoveProfileArgs,
+    client: &dyn WinAppsClient,
+) -> std::result::Result<OfficeRemoveProfileResponse, OfficeError> {
+    let paths = OfficeRemovalPaths::for_profile(&args.name);
+    remove_profile_at(args, &paths, client)
+}
+
+fn remove_profile_at(
+    args: OfficeRemoveProfileArgs,
+    removal_paths: &OfficeRemovalPaths,
+    client: &dyn WinAppsClient,
+) -> std::result::Result<OfficeRemoveProfileResponse, OfficeError> {
+    let token = args.confirm_token.as_deref().unwrap_or("").trim();
+    if token.is_empty() || !validate_remove_confirm_token(token, &args.name, args.delete_disk) {
+        let reason = if token.is_empty() {
+            "missing"
+        } else {
+            "invalid_or_used"
+        };
+        return Err(remove_requires_confirmation(
+            &args.name,
+            args.delete_disk,
+            reason,
         ));
     }
-    let profile_dir = paths::profile_cfg_dir(&args.name);
+
     let mut state =
-        OfficeProvisioningState::load_or_default(&profile_dir, &args.name).map_err(|err| {
+        OfficeProvisioningState::load_or_default(&removal_paths.profile_dir, &args.name).map_err(
+            |err| {
+                office_error(
+                    OfficeError::PROFILE_STATE_CONFLICT,
+                    OfficePhase::FirstLaunch,
+                    true,
+                    serde_json::json!({ "detail": format!("{err:#}") }),
+                )
+            },
+        )?;
+    let mut removed_paths = Vec::new();
+
+    if should_uninstall_winapps(&state) {
+        winapps::uninstall(client, &removal_paths.winapps_source_dir)?;
+        if state.managed_paths.winapps_conf_owned {
+            remove_file_if_exists(&removal_paths.winapps_conf_path, &mut removed_paths)?;
+        }
+    }
+
+    let desktop_paths = state
+        .managed_paths
+        .desktop_files
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if manages_desktop_entries(&state) && !desktop_paths.is_empty() {
+        let removal = winapps::remove_desktop_files(&desktop_paths)?;
+        removed_paths.extend(removal.removed_files);
+    }
+
+    if manages_file_associations(&state) && !state.managed_paths.mime_types.is_empty() {
+        let removal = winapps::remove_mime_associations(&removal_paths.mimeapps_path)?;
+        removed_paths.push(removal.path);
+    }
+
+    let disk_removed = args.delete_disk && manages_disk_lifecycle(&state);
+    if disk_removed {
+        remove_dir_if_exists(&removal_paths.profile_data_dir, &mut removed_paths)?;
+    }
+
+    state.status = OfficeProfileStatus::Removed;
+    state
+        .save_to_dir(&removal_paths.profile_dir)
+        .map_err(|err| {
             office_error(
                 OfficeError::PROFILE_STATE_CONFLICT,
                 OfficePhase::FirstLaunch,
@@ -526,20 +582,12 @@ pub fn remove_profile_contract(
                 serde_json::json!({ "detail": format!("{err:#}") }),
             )
         })?;
-    state.status = OfficeProfileStatus::Removed;
-    state.save_to_dir(&profile_dir).map_err(|err| {
-        office_error(
-            OfficeError::PROFILE_STATE_CONFLICT,
-            OfficePhase::FirstLaunch,
-            true,
-            serde_json::json!({ "detail": format!("{err:#}") }),
-        )
-    })?;
+
     Ok(OfficeRemoveProfileResponse {
         state: "removed".to_string(),
         confirm_token: None,
-        preserved_disk: Some(!args.delete_disk),
-        removed_paths: Vec::new(),
+        preserved_disk: Some(!disk_removed),
+        removed_paths,
     })
 }
 
@@ -695,13 +743,167 @@ fn validate_launch_files(files: &[String]) -> std::result::Result<Vec<String>, O
     Ok(accepted)
 }
 
+fn remove_requires_confirmation(profile: &str, delete_disk: bool, reason: &str) -> OfficeError {
+    office_error(
+        OfficeError::REMOVE_REQUIRES_CONFIRMATION,
+        OfficePhase::FirstLaunch,
+        false,
+        serde_json::json!({
+            "confirmToken": mint_remove_confirm_token(profile, delete_disk),
+            "deleteDisk": delete_disk,
+            "reason": reason,
+            "actionHint": "Execute novamente informando --confirm <token>. Use --delete-disk somente se quiser apagar o disco do perfil.",
+        }),
+    )
+}
+
 fn mint_remove_confirm_token(profile: &str, delete_disk: bool) -> String {
-    format!(
-        "office-remove:{}:{}:{}",
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let token = format!(
+        "office-remove:{}:{}:{}:{}",
+        std::process::id(),
         profile,
         delete_disk,
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    )
+        nanos
+    );
+    let expires_at = chrono::Utc::now().timestamp() + REMOVE_CONFIRM_TOKEN_TTL_SECONDS;
+    remove_confirm_tokens()
+        .lock()
+        .expect("remove token store poisoned")
+        .insert(
+            token.clone(),
+            RemoveConfirmToken {
+                profile: profile.to_string(),
+                delete_disk,
+                expires_at,
+            },
+        );
+    token
+}
+
+fn validate_remove_confirm_token(token: &str, profile: &str, delete_disk: bool) -> bool {
+    let Some(stored) = remove_confirm_tokens()
+        .lock()
+        .expect("remove token store poisoned")
+        .remove(token)
+    else {
+        return false;
+    };
+    stored.profile == profile
+        && stored.delete_disk == delete_disk
+        && stored.expires_at >= chrono::Utc::now().timestamp()
+}
+
+fn remove_confirm_tokens() -> &'static Mutex<BTreeMap<String, RemoveConfirmToken>> {
+    static TOKENS: OnceLock<Mutex<BTreeMap<String, RemoveConfirmToken>>> = OnceLock::new();
+    TOKENS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+const REMOVE_CONFIRM_TOKEN_TTL_SECONDS: i64 = 15 * 60;
+
+#[derive(Debug, Clone)]
+struct RemoveConfirmToken {
+    profile: String,
+    delete_disk: bool,
+    expires_at: i64,
+}
+
+#[derive(Debug, Clone)]
+struct OfficeRemovalPaths {
+    profile_dir: PathBuf,
+    profile_data_dir: PathBuf,
+    winapps_source_dir: PathBuf,
+    winapps_conf_path: PathBuf,
+    mimeapps_path: PathBuf,
+}
+
+impl OfficeRemovalPaths {
+    fn for_profile(profile: &str) -> Self {
+        Self {
+            profile_dir: paths::profile_cfg_dir(profile),
+            profile_data_dir: paths::profile_data_dir(profile),
+            winapps_source_dir: winapps::managed_source_dir(),
+            winapps_conf_path: winapps::winapps_conf_path(),
+            mimeapps_path: winapps::mimeapps_path(),
+        }
+    }
+}
+
+fn should_uninstall_winapps(state: &OfficeProvisioningState) -> bool {
+    state.managed_paths.winapps_conf_owned
+        && state.phase_status(OfficePhase::WinappsConfig) == Some(PhaseStatus::Done)
+        && manages_winapps_conf(state)
+}
+
+fn manages_winapps_conf(state: &OfficeProvisioningState) -> bool {
+    managed_scope_bool(state, "manageWinAppsConf", true)
+}
+
+fn manages_desktop_entries(state: &OfficeProvisioningState) -> bool {
+    managed_scope_bool(state, "manageDesktopEntries", true)
+}
+
+fn manages_file_associations(state: &OfficeProvisioningState) -> bool {
+    managed_scope_bool(state, "manageFileAssociations", true)
+}
+
+fn manages_disk_lifecycle(state: &OfficeProvisioningState) -> bool {
+    managed_scope_bool(state, "manageDiskLifecycle", true)
+}
+
+fn managed_scope_bool(state: &OfficeProvisioningState, key: &str, default: bool) -> bool {
+    state
+        .adoption
+        .as_ref()
+        .and_then(|adoption| adoption.found.first())
+        .and_then(|finding| finding.get("managedScope"))
+        .and_then(|scope| scope.get(key))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn remove_file_if_exists(
+    path: &Path,
+    removed_paths: &mut Vec<String>,
+) -> std::result::Result<(), OfficeError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            removed_paths.push(path.display().to_string());
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({
+                "path": path,
+                "detail": format!("não foi possível remover arquivo gerenciado: {err}"),
+            }),
+        )),
+    }
+}
+
+fn remove_dir_if_exists(
+    path: &Path,
+    removed_paths: &mut Vec<String>,
+) -> std::result::Result<(), OfficeError> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => {
+            removed_paths.push(path.display().to_string());
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({
+                "path": path,
+                "detail": format!("não foi possível remover diretório gerenciado: {err}"),
+            }),
+        )),
+    }
 }
 
 pub fn prepare_remoteapp(profile: &str) -> Result<OfficeProvisioningState> {
@@ -1235,6 +1437,7 @@ fn mark_winapps_done(
     state: &mut OfficeProvisioningState,
     setup: winapps::WinAppsSetup,
 ) -> Result<()> {
+    state.managed_paths.winapps_conf_owned = true;
     state.mark_phase_done(
         OfficePhase::WinappsConfig,
         Some(PhaseEvidence {
@@ -1392,6 +1595,7 @@ mod tests {
     use crate::core::guest_executor::{GuestMarker, GuestMarkerStatus};
     use crate::core::office_odt::mock::MockOdtHost;
     use crate::core::office_state::PhaseStatus;
+    use crate::core::winapps::mock::MockWinAppsClient;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1598,6 +1802,149 @@ mod tests {
             adoption.found[0]["managedScope"]["manageWinAppsConf"],
             false
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn office_remove_requires_single_use_token() {
+        let root = temp_dir("remove-token");
+        let removal_paths = removal_paths_under(&root);
+        seed_managed_removal_state("office", &removal_paths);
+        let client = MockWinAppsClient::new();
+
+        let missing = remove_profile_at(
+            OfficeRemoveProfileArgs {
+                name: "office".to_string(),
+                delete_disk: true,
+                confirm_token: None,
+            },
+            &removal_paths,
+            &client,
+        )
+        .expect_err("first call should require confirmation");
+        assert_eq!(missing.code(), OfficeError::REMOVE_REQUIRES_CONFIRMATION);
+        let scoped_token = confirm_token_from(&missing);
+
+        let wrong_scope = remove_profile_at(
+            OfficeRemoveProfileArgs {
+                name: "office".to_string(),
+                delete_disk: false,
+                confirm_token: Some(scoped_token),
+            },
+            &removal_paths,
+            &client,
+        )
+        .expect_err("token minted for deleteDisk=true must not authorize deleteDisk=false");
+        assert_eq!(
+            wrong_scope
+                .fields()
+                .details
+                .as_ref()
+                .and_then(|details| details.get("reason"))
+                .and_then(serde_json::Value::as_str),
+            Some("invalid_or_used")
+        );
+
+        let fresh = remove_profile_at(
+            OfficeRemoveProfileArgs {
+                name: "office".to_string(),
+                delete_disk: true,
+                confirm_token: None,
+            },
+            &removal_paths,
+            &client,
+        )
+        .expect_err("second confirmation should mint a fresh token");
+        let token = confirm_token_from(&fresh);
+        client.push_setup(winapps_ok(""));
+
+        let response = remove_profile_at(
+            OfficeRemoveProfileArgs {
+                name: "office".to_string(),
+                delete_disk: true,
+                confirm_token: Some(token.clone()),
+            },
+            &removal_paths,
+            &client,
+        )
+        .expect("valid token should remove managed Office assets");
+
+        assert_eq!(response.state, "removed");
+        assert_eq!(response.preserved_disk, Some(false));
+        assert!(client
+            .calls()
+            .contains(&"setup:--user --uninstall".to_string()));
+        assert!(!removal_paths.profile_data_dir.exists());
+        assert!(!removal_paths.winapps_conf_path.exists());
+        for launcher in winapps::OFFICE_LAUNCHERS {
+            assert!(!root
+                .join("applications")
+                .join(format!("{launcher}.desktop"))
+                .exists());
+        }
+        let mimeapps = std::fs::read_to_string(&removal_paths.mimeapps_path)
+            .expect("mimeapps should remain readable");
+        assert!(!mimeapps.contains("excel-o365.desktop"));
+        let state = OfficeProvisioningState::load_or_default(&removal_paths.profile_dir, "office")
+            .expect("removed state should load");
+        assert_eq!(state.summarize_status(), OfficeProfileStatus::Removed);
+
+        let reused = remove_profile_at(
+            OfficeRemoveProfileArgs {
+                name: "office".to_string(),
+                delete_disk: true,
+                confirm_token: Some(token),
+            },
+            &removal_paths,
+            &client,
+        )
+        .expect_err("confirmToken must be single-use");
+        assert_eq!(reused.code(), OfficeError::REMOVE_REQUIRES_CONFIRMATION);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remove_preserves_unmanaged_adoption_assets() {
+        let root = temp_dir("remove-adopted");
+        let removal_paths = removal_paths_under(&root);
+        seed_unmanaged_adoption_state("office", &removal_paths);
+        let client = MockWinAppsClient::new();
+        let token = confirm_token_from(
+            &remove_profile_at(
+                OfficeRemoveProfileArgs {
+                    name: "office".to_string(),
+                    delete_disk: true,
+                    confirm_token: None,
+                },
+                &removal_paths,
+                &client,
+            )
+            .expect_err("confirmation should be required"),
+        );
+
+        let response = remove_profile_at(
+            OfficeRemoveProfileArgs {
+                name: "office".to_string(),
+                delete_disk: true,
+                confirm_token: Some(token),
+            },
+            &removal_paths,
+            &client,
+        )
+        .expect("adopted profile removal should preserve unmanaged assets");
+
+        assert_eq!(response.state, "removed");
+        assert_eq!(response.preserved_disk, Some(true));
+        assert!(client.calls().is_empty());
+        assert!(removal_paths.profile_data_dir.exists());
+        assert!(removal_paths.winapps_conf_path.exists());
+        assert!(root
+            .join("applications")
+            .join("excel-o365.desktop")
+            .exists());
+        let mimeapps = std::fs::read_to_string(&removal_paths.mimeapps_path)
+            .expect("mimeapps should remain readable");
+        assert!(mimeapps.contains("excel-o365.desktop"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1833,6 +2180,135 @@ mod tests {
             }),
             updated_at: Some("2026-07-08T00:00:00Z".to_string()),
         }
+    }
+
+    fn removal_paths_under(root: &Path) -> OfficeRemovalPaths {
+        OfficeRemovalPaths {
+            profile_dir: root.join("profile-cfg"),
+            profile_data_dir: root.join("profile-data"),
+            winapps_source_dir: root.join("winapps-src"),
+            winapps_conf_path: root.join("config").join("winapps.conf"),
+            mimeapps_path: root.join("config").join("mimeapps.list"),
+        }
+    }
+
+    fn seed_managed_removal_state(profile: &str, paths: &OfficeRemovalPaths) {
+        seed_removal_files(paths);
+        let applications_dir = paths
+            .winapps_source_dir
+            .parent()
+            .expect("root should exist")
+            .join("applications");
+        let desktop_files = winapps::OFFICE_LAUNCHERS
+            .iter()
+            .map(|launcher| {
+                applications_dir
+                    .join(format!("{launcher}.desktop"))
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        let mut state = OfficeProvisioningState::new(profile);
+        state.managed_paths.winapps_conf_owned = true;
+        state.managed_paths.desktop_files = desktop_files;
+        state.managed_paths.mime_types = winapps::OFFICE_MIME_ASSOCIATIONS
+            .iter()
+            .map(|association| association.mime_type.to_string())
+            .collect();
+        mark_ready_winapps_phase(&mut state);
+        state
+            .save_to_dir(&paths.profile_dir)
+            .expect("managed state should save");
+    }
+
+    fn seed_unmanaged_adoption_state(profile: &str, paths: &OfficeRemovalPaths) {
+        seed_managed_removal_state(profile, paths);
+        let mut state = OfficeProvisioningState::load_or_default(&paths.profile_dir, profile)
+            .expect("state should load");
+        state.status = OfficeProfileStatus::Adopted;
+        state.adoption = Some(AdoptionState {
+            found: vec![serde_json::json!({
+                "id": "manual-existing",
+                "kind": "profile",
+                "status": "compatible",
+                "evidence": "ativos existentes do usuário",
+                "managedByDefault": false,
+                "managedScope": manual_user_assets_scope(),
+            })],
+            user_confirmed_at: Some("2026-07-08T00:00:00Z".to_string()),
+        });
+        state
+            .save_to_dir(&paths.profile_dir)
+            .expect("adopted state should save");
+    }
+
+    fn seed_removal_files(paths: &OfficeRemovalPaths) {
+        std::fs::create_dir_all(&paths.profile_data_dir).expect("profile data should exist");
+        std::fs::write(paths.profile_data_dir.join("boot.qcow2"), "disk")
+            .expect("disk marker should be written");
+        std::fs::create_dir_all(&paths.winapps_source_dir).expect("winapps source should exist");
+        std::fs::create_dir_all(
+            paths
+                .winapps_conf_path
+                .parent()
+                .expect("config parent should exist"),
+        )
+        .expect("config dir should exist");
+        std::fs::write(&paths.winapps_conf_path, "RDP_USER='winbox'\n")
+            .expect("winapps conf should be written");
+        std::fs::write(&paths.mimeapps_path, winapps::render_mimeapps_list(""))
+            .expect("mimeapps should be written");
+        let applications_dir = paths
+            .winapps_source_dir
+            .parent()
+            .expect("root should exist")
+            .join("applications");
+        std::fs::create_dir_all(&applications_dir).expect("applications dir should exist");
+        for launcher in winapps::OFFICE_LAUNCHERS {
+            std::fs::write(
+                applications_dir.join(format!("{launcher}.desktop")),
+                format!("[Desktop Entry]\nName={launcher}\nExec=winapps {launcher}\n"),
+            )
+            .expect("desktop should be written");
+        }
+    }
+
+    fn mark_ready_winapps_phase(state: &mut OfficeProvisioningState) {
+        state
+            .mark_phase_running(OfficePhase::WinappsConfig)
+            .expect("winapps should run");
+        state
+            .mark_phase_done(
+                OfficePhase::WinappsConfig,
+                Some(PhaseEvidence {
+                    launcher_ids: winapps::OFFICE_LAUNCHERS
+                        .iter()
+                        .map(|launcher| launcher.to_string())
+                        .collect(),
+                    ..PhaseEvidence::default()
+                }),
+            )
+            .expect("winapps should be done");
+    }
+
+    fn winapps_ok(stdout: &str) -> winapps::WinAppsCommandOutput {
+        winapps::WinAppsCommandOutput {
+            success: true,
+            status_code: Some(0),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        }
+    }
+
+    fn confirm_token_from(error: &OfficeError) -> String {
+        error
+            .fields()
+            .details
+            .as_ref()
+            .and_then(|details| details.get("confirmToken"))
+            .and_then(serde_json::Value::as_str)
+            .expect("error should carry confirmToken")
+            .to_string()
     }
 
     fn manual_user_assets_scope() -> ManagedScope {
