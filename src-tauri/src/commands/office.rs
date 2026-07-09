@@ -2,8 +2,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
+use crate::commands::launch as vm_launch;
 use crate::core::{
     docker::{CliDocker, DockerClient},
     env_file,
@@ -136,6 +138,8 @@ pub struct OfficeLaunchAppArgs {
     pub app_id: String,
     #[serde(default)]
     pub files: Vec<String>,
+    #[serde(default, rename = "guiProgress", alias = "gui_progress")]
+    pub gui_progress: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -479,21 +483,85 @@ fn adoption_skipped_phases(scope: &ManagedScope) -> Vec<OfficePhase> {
 pub fn launch_app_contract(
     args: OfficeLaunchAppArgs,
 ) -> std::result::Result<OfficeLaunchAppResponse, OfficeError> {
-    if !matches!(args.app_id.as_str(), "excel" | "word" | "powerpoint") {
-        return Err(office_error(
+    launch_app_with_clients(args, &CliDocker, &CliWinAppsClient, &CliOfficeLaunchHost)
+}
+
+fn launch_app_with_clients<D: DockerClient>(
+    args: OfficeLaunchAppArgs,
+    docker: &D,
+    winapps_client: &dyn WinAppsClient,
+    host: &dyn OfficeLaunchHost,
+) -> std::result::Result<OfficeLaunchAppResponse, OfficeError> {
+    let profile_dir = paths::profile_cfg_dir(&args.name);
+    launch_app_at(args, &profile_dir, docker, winapps_client, host)
+}
+
+fn launch_app_at<D: DockerClient>(
+    args: OfficeLaunchAppArgs,
+    profile_dir: &Path,
+    docker: &D,
+    winapps_client: &dyn WinAppsClient,
+    host: &dyn OfficeLaunchHost,
+) -> std::result::Result<OfficeLaunchAppResponse, OfficeError> {
+    let accepted = validate_launch_files(&args.files)?;
+    let mut state = load_office_state_at(profile_dir, &args.name)?;
+    let launcher = winapps::launcher_for_app_id(&args.app_id).ok_or_else(|| {
+        office_error(
             OfficeError::APP_NOT_REGISTERED,
             OfficePhase::FirstLaunch,
             false,
             serde_json::json!({ "appId": args.app_id }),
-        ));
+        )
+    })?;
+    ensure_launch_prerequisites(&state, launcher)?;
+
+    if args.gui_progress {
+        let _ = host.spawn_progress_window(&args.name, &args.app_id);
     }
-    let accepted = validate_launch_files(&args.files)?;
-    let state = load_office_state_for_contract(&args.name).ok();
+
+    host.notify(
+        "winbox Office",
+        &format!("Preparando {} para abrir {}.", args.name, args.app_id),
+    );
+    let transition = vm_launch::ensure_started(&args.name, docker)
+        .map_err(|err| map_launch_error(err, "vm_start"))?;
+    let cold_started = transition != vm_launch::ContainerTransition::AlreadyRunning;
+    if cold_started {
+        host.notify(
+            "winbox Office",
+            "VM Office iniciando; isso pode levar alguns minutos.",
+        );
+    }
+    if transition == vm_launch::ContainerTransition::Recreated {
+        let container = paths::profile_container(&args.name);
+        vm_launch::wait_for_windows(&args.name, &container, docker)
+            .map_err(|err| map_launch_error(err, "rdp_wait"))?;
+    }
+
+    host.notify("winbox Office", "Delegando app Office ao WinApps.");
+    let launch = winapps::launch_office_app(winapps_client, &args.app_id, &accepted)?;
+    mark_first_launch_done(&mut state, &args.app_id, &launch, cold_started).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    state.save_to_dir(profile_dir).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+
     Ok(OfficeLaunchAppResponse {
         app_id: args.app_id,
-        delegated_to: "winapps".to_string(),
+        delegated_to: launch.launcher,
         files_accepted: accepted,
-        active_sessions: state.and_then(|state| state.active_sessions),
+        active_sessions: state.active_sessions,
     })
 }
 
@@ -712,6 +780,147 @@ fn provisioning_response(state: &OfficeProvisioningState) -> OfficeProvisioningR
         phases: state.phases.clone(),
         last_error: state.last_error.clone(),
     }
+}
+
+trait OfficeLaunchHost {
+    fn notify(&self, title: &str, message: &str);
+    fn spawn_progress_window(&self, profile: &str, app_id: &str) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CliOfficeLaunchHost;
+
+impl OfficeLaunchHost for CliOfficeLaunchHost {
+    fn notify(&self, title: &str, message: &str) {
+        let _ = Command::new("notify-send").arg(title).arg(message).status();
+    }
+
+    fn spawn_progress_window(&self, profile: &str, app_id: &str) -> Result<()> {
+        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("winbox"));
+        Command::new(exe)
+            .arg("--window=office-progress")
+            .arg(profile)
+            .arg(app_id)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| anyhow::anyhow!("não foi possível abrir janela office-progress: {err}"))
+    }
+}
+
+fn ensure_launch_prerequisites(
+    state: &OfficeProvisioningState,
+    launcher: &str,
+) -> std::result::Result<(), OfficeError> {
+    if state.phase_status(OfficePhase::RemoteappPrepare) != Some(PhaseStatus::Done) {
+        return Err(office_error(
+            OfficeError::GUEST_REMOTEAPP_NOT_PREPARED,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({
+                "requiredPhase": OfficePhase::RemoteappPrepare,
+                "status": state.phase_status(OfficePhase::RemoteappPrepare),
+                "actionHint": "Prepare RemoteApp pelo wizard ou abra o desktop via noVNC e execute C:\\OEM\\install.bat.",
+            }),
+        ));
+    }
+    if state.phase_status(OfficePhase::OfficeInstall) != Some(PhaseStatus::Done) {
+        return Err(office_error(
+            OfficeError::OFFICE_DETECTION_FAILED,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({
+                "requiredPhase": OfficePhase::OfficeInstall,
+                "status": state.phase_status(OfficePhase::OfficeInstall),
+                "actionHint": "Conclua a instalação/verificação do Office antes de abrir apps.",
+            }),
+        ));
+    }
+    if state.phase_status(OfficePhase::WinappsConfig) != Some(PhaseStatus::Done) {
+        return Err(office_error(
+            OfficeError::APP_NOT_REGISTERED,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({
+                "requiredPhase": OfficePhase::WinappsConfig,
+                "status": state.phase_status(OfficePhase::WinappsConfig),
+                "launcher": launcher,
+                "actionHint": "Rode a configuração WinApps do perfil Office novamente.",
+            }),
+        ));
+    }
+    let launchers = state
+        .phases
+        .get(&OfficePhase::WinappsConfig)
+        .and_then(|phase| phase.evidence.as_ref())
+        .map(|evidence| evidence.launcher_ids.as_slice())
+        .unwrap_or(&[]);
+    if !launchers.iter().any(|registered| registered == launcher) {
+        return Err(office_error(
+            OfficeError::APP_NOT_REGISTERED,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({
+                "launcher": launcher,
+                "registeredLaunchers": launchers,
+                "actionHint": "Reaplique winapps_config/desktop_registration para recriar o launcher ausente.",
+            }),
+        ));
+    }
+    Ok(())
+}
+
+fn map_launch_error(error: crate::core::launch_error::LaunchError, context: &str) -> OfficeError {
+    let code = error.code();
+    let office_code = if code == "timeout_windows" {
+        OfficeError::GUEST_RDP_UNREACHABLE
+    } else {
+        OfficeError::OFFICE_WINDOWS_FAILED
+    };
+    office_error(
+        office_code,
+        OfficePhase::FirstLaunch,
+        true,
+        serde_json::json!({
+            "context": context,
+            "launchCode": code,
+            "launchDetails": serde_json::to_value(&error).unwrap_or_else(|_| serde_json::json!({ "code": code })),
+            "actionHint": launch_error_hint(code),
+        }),
+    )
+}
+
+fn launch_error_hint(code: &str) -> &'static str {
+    match code {
+        "timeout_windows" => "A VM iniciou, mas o Windows/RDP não ficou pronto; abra o viewer noVNC e verifique o boot.",
+        "docker_missing" | "docker_daemon_down" => {
+            "Corrija Docker/daemon e execute novamente o launcher Office."
+        }
+        "port_conflict" => "Libere a porta do perfil ou ajuste RDP_PORT antes de abrir o app.",
+        _ => "Verifique o estado da VM Office e tente abrir o app novamente.",
+    }
+}
+
+fn mark_first_launch_done(
+    state: &mut OfficeProvisioningState,
+    app_id: &str,
+    launch: &winapps::WinAppsLaunch,
+    cold_started: bool,
+) -> Result<()> {
+    state.mark_phase_done(
+        OfficePhase::FirstLaunch,
+        Some(PhaseEvidence {
+            exit_code: Some(launch.exit_code),
+            files: launch.files.clone(),
+            launcher_ids: vec![launch.launcher.clone()],
+            registry: Some(serde_json::json!({
+                "appId": app_id,
+                "delegatedTo": "winapps",
+                "coldStarted": cold_started,
+                "activationDetection": "not_available_static_guidance",
+            })),
+            ..PhaseEvidence::default()
+        }),
+    )
 }
 
 fn validate_launch_files(files: &[String]) -> std::result::Result<Vec<String>, OfficeError> {
@@ -1593,9 +1802,11 @@ mod tests {
     use crate::core::docker::mock::MockDocker;
     use crate::core::guest_executor::mock::MockGuestExecutor;
     use crate::core::guest_executor::{GuestMarker, GuestMarkerStatus};
+    use crate::core::launch_error::LaunchError;
     use crate::core::office_odt::mock::MockOdtHost;
     use crate::core::office_state::PhaseStatus;
     use crate::core::winapps::mock::MockWinAppsClient;
+    use std::cell::RefCell;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1802,6 +2013,205 @@ mod tests {
             adoption.found[0]["managedScope"]["manageWinAppsConf"],
             false
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn office_launch_file_outside_home_returns_hint() {
+        let err = launch_app_contract(OfficeLaunchAppArgs {
+            name: "office".to_string(),
+            app_id: "excel".to_string(),
+            files: vec!["/__winbox_outside_home/planilha.xlsx".to_string()],
+            gui_progress: false,
+        })
+        .expect_err("files outside HOME must be rejected before launch");
+
+        assert_eq!(err.code(), OfficeError::FILE_OUTSIDE_HOME);
+        assert_eq!(err.fields().phase, OfficePhase::FirstLaunch);
+        let details = err.fields().details.as_ref().expect("details required");
+        assert!(details["actionHint"]
+            .as_str()
+            .expect("hint should be string")
+            .contains("+home-drive só expõe $HOME"));
+    }
+
+    #[test]
+    fn launch_emits_cold_start_and_remoteapp_steps() {
+        let root = temp_dir("launch-cold-start");
+        let profile_dir = root.join("profile");
+        let profile = "office-task16-cold";
+        seed_launch_ready_state(profile, &profile_dir);
+        let docker = MockDocker::new();
+        let container = paths::profile_container(profile);
+        docker.seed_status(&container, "absent");
+        docker.seed_logs_contains(&container, "windows started successfully", true);
+        let winapps = MockWinAppsClient::new();
+        winapps.push_launch(winapps_command_ok(""));
+        let host = MockLaunchHost::default();
+
+        let response = launch_app_at(
+            OfficeLaunchAppArgs {
+                name: profile.to_string(),
+                app_id: "excel".to_string(),
+                files: vec![home_file("office-launch.xlsx")],
+                gui_progress: true,
+            },
+            &profile_dir,
+            &docker,
+            &winapps,
+            &host,
+        )
+        .expect("cold-start launch should delegate to WinApps");
+
+        assert_eq!(response.app_id, "excel");
+        assert_eq!(response.delegated_to, "excel-o365");
+        assert_eq!(response.files_accepted.len(), 1);
+        assert!(docker
+            .calls()
+            .iter()
+            .any(|call| call == &format!("compose:{profile}:up -d")));
+        assert!(
+            docker
+                .calls()
+                .iter()
+                .any(|call| call
+                    == &format!("logs_contains:{container}:windows started successfully"))
+        );
+        assert!(winapps
+            .calls()
+            .contains(&format!("launch:excel-o365:{}", response.files_accepted[0])));
+        assert_eq!(
+            host.spawns(),
+            vec![format!("--window=office-progress {profile} excel")]
+        );
+        let notifications = host.notifications();
+        assert!(notifications
+            .iter()
+            .any(|message| message.contains("VM Office iniciando")));
+        assert!(notifications
+            .iter()
+            .any(|message| message.contains("Delegando app Office ao WinApps")));
+        let state = OfficeProvisioningState::load_or_default(&profile_dir, profile)
+            .expect("state should persist first launch");
+        assert_eq!(
+            state.phase_status(OfficePhase::FirstLaunch),
+            Some(PhaseStatus::Done)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launch_direct_when_vm_already_running_skips_cold_start_wait() {
+        let root = temp_dir("launch-running");
+        let profile_dir = root.join("profile");
+        let profile = "office-task16-running";
+        seed_launch_ready_state(profile, &profile_dir);
+        let docker = MockDocker::new();
+        let container = paths::profile_container(profile);
+        docker.seed_status(&container, "running");
+        let winapps = MockWinAppsClient::new();
+        winapps.push_launch(winapps_command_ok(""));
+        let host = MockLaunchHost::default();
+
+        let response = launch_app_at(
+            OfficeLaunchAppArgs {
+                name: profile.to_string(),
+                app_id: "word".to_string(),
+                files: Vec::new(),
+                gui_progress: false,
+            },
+            &profile_dir,
+            &docker,
+            &winapps,
+            &host,
+        )
+        .expect("running VM should launch directly");
+
+        assert_eq!(response.delegated_to, "word-o365");
+        assert!(!docker
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("logs_contains:")));
+        assert!(host.spawns().is_empty());
+        let notifications = host.notifications();
+        assert!(!notifications
+            .iter()
+            .any(|message| message.contains("VM Office iniciando")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launch_failure_reports_vm_rdp_winapps_or_app_context() {
+        let root = temp_dir("launch-failures");
+        let profile_dir = root.join("profile");
+        let profile = "office-task16-failures";
+        seed_launch_ready_state(profile, &profile_dir);
+        let docker = MockDocker::new();
+        docker.set_compose_failure(LaunchError::PortConflict { port: 3390 });
+        let err = launch_app_at(
+            OfficeLaunchAppArgs {
+                name: profile.to_string(),
+                app_id: "excel".to_string(),
+                files: Vec::new(),
+                gui_progress: false,
+            },
+            &profile_dir,
+            &docker,
+            &MockWinAppsClient::new(),
+            &MockLaunchHost::default(),
+        )
+        .expect_err("compose failure should preserve launch context");
+        assert_eq!(err.code(), OfficeError::OFFICE_WINDOWS_FAILED);
+        assert_eq!(
+            err.fields()
+                .details
+                .as_ref()
+                .and_then(|details| details.get("launchCode"))
+                .and_then(serde_json::Value::as_str),
+            Some("port_conflict")
+        );
+
+        let docker = MockDocker::new();
+        docker.seed_status(&paths::profile_container(profile), "running");
+        let winapps = MockWinAppsClient::new();
+        winapps.push_launch(winapps_command_fail(7, "RDP caiu"));
+        let err = launch_app_at(
+            OfficeLaunchAppArgs {
+                name: profile.to_string(),
+                app_id: "powerpoint".to_string(),
+                files: Vec::new(),
+                gui_progress: false,
+            },
+            &profile_dir,
+            &docker,
+            &winapps,
+            &MockLaunchHost::default(),
+        )
+        .expect_err("WinApps launch failure should be actionable");
+        assert_eq!(err.code(), OfficeError::APP_LAUNCH_FAILED);
+        assert_eq!(
+            err.fields()
+                .details
+                .as_ref()
+                .and_then(|details| details.get("launcher"))
+                .and_then(serde_json::Value::as_str),
+            Some("powerpoint-o365")
+        );
+
+        let err = launch_app_at(
+            OfficeLaunchAppArgs {
+                name: profile.to_string(),
+                app_id: "access".to_string(),
+                files: Vec::new(),
+                gui_progress: false,
+            },
+            &profile_dir,
+            &MockDocker::new(),
+            &MockWinAppsClient::new(),
+            &MockLaunchHost::default(),
+        )
+        .expect_err("unsupported app should not reach Docker or WinApps");
+        assert_eq!(err.code(), OfficeError::APP_NOT_REGISTERED);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2179,6 +2589,99 @@ mod tests {
                 }),
             }),
             updated_at: Some("2026-07-08T00:00:00Z".to_string()),
+        }
+    }
+
+    #[derive(Default)]
+    struct MockLaunchHost {
+        notifications: RefCell<Vec<String>>,
+        spawns: RefCell<Vec<String>>,
+    }
+
+    impl MockLaunchHost {
+        fn notifications(&self) -> Vec<String> {
+            self.notifications.borrow().clone()
+        }
+
+        fn spawns(&self) -> Vec<String> {
+            self.spawns.borrow().clone()
+        }
+    }
+
+    impl OfficeLaunchHost for MockLaunchHost {
+        fn notify(&self, title: &str, message: &str) {
+            self.notifications
+                .borrow_mut()
+                .push(format!("{title}: {message}"));
+        }
+
+        fn spawn_progress_window(&self, profile: &str, app_id: &str) -> Result<()> {
+            self.spawns
+                .borrow_mut()
+                .push(format!("--window=office-progress {profile} {app_id}"));
+            Ok(())
+        }
+    }
+
+    fn seed_launch_ready_state(profile: &str, profile_dir: &Path) {
+        let mut state = OfficeProvisioningState::new(profile);
+        for phase in [
+            OfficePhase::RemoteappPrepare,
+            OfficePhase::OfficeInstall,
+            OfficePhase::WinappsConfig,
+            OfficePhase::FinalVerify,
+        ] {
+            state.mark_phase_running(phase).expect("phase should run");
+            let evidence = match phase {
+                OfficePhase::OfficeInstall => Some(PhaseEvidence {
+                    files: winapps::OFFICE_DESKTOP_APPS
+                        .iter()
+                        .map(|app| app.executable.to_string())
+                        .collect(),
+                    registry: Some(serde_json::json!({
+                        "productReleaseIds": "O365ProPlusRetail",
+                        "versionToReport": "16.0.12345.67890",
+                        "platform": "x64",
+                    })),
+                    ..PhaseEvidence::default()
+                }),
+                OfficePhase::WinappsConfig | OfficePhase::FinalVerify => Some(PhaseEvidence {
+                    launcher_ids: winapps::OFFICE_LAUNCHERS
+                        .iter()
+                        .map(|launcher| launcher.to_string())
+                        .collect(),
+                    ..PhaseEvidence::default()
+                }),
+                _ => None,
+            };
+            state
+                .mark_phase_done(phase, evidence)
+                .expect("phase should finish");
+        }
+        state
+            .save_to_dir(profile_dir)
+            .expect("launch-ready state should save");
+    }
+
+    fn home_file(name: &str) -> String {
+        paths::home().join(name).display().to_string()
+    }
+
+    fn winapps_command_ok(stdout: &str) -> winapps::WinAppsCommandOutput {
+        winapps::WinAppsCommandOutput {
+            success: true,
+            status_code: Some(0),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        }
+    }
+
+    fn winapps_command_fail(code: i32, stderr: &str) -> winapps::WinAppsCommandOutput {
+        winapps::WinAppsCommandOutput {
+            success: false,
+            status_code: Some(code),
+            stdout: String::new(),
+            stderr: stderr.to_string(),
         }
     }
 

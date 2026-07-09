@@ -248,20 +248,14 @@ pub fn run_office_command_with_writer<W: Write>(
             files,
         } => {
             let command_profile = profile.clone();
-            let mut value = run_with_progress(
-                writer,
-                progress,
-                &profile,
-                "office_launch",
-                OfficePhase::FirstLaunch,
-                || {
-                    json_value(office::launch_app_contract(OfficeLaunchAppArgs {
-                        name: command_profile,
-                        app_id: app,
-                        files,
-                    })?)
-                },
-            )?;
+            let mut value = run_launch_with_progress(writer, progress, &profile, || {
+                json_value(office::launch_app_contract(OfficeLaunchAppArgs {
+                    name: command_profile,
+                    app_id: app,
+                    files,
+                    gui_progress,
+                })?)
+            })?;
             value["guiProgress"] = json!(gui_progress);
             value
         }
@@ -322,6 +316,53 @@ where
                 progress,
                 profile,
                 operation,
+                error.fields().phase,
+                "error",
+                &error.to_string(),
+            )?;
+            Err(error)
+        }
+    }
+}
+
+fn run_launch_with_progress<W, F>(
+    writer: &mut W,
+    progress: Option<ProgressFormat>,
+    profile: &str,
+    run: F,
+) -> std::result::Result<Value, OfficeError>
+where
+    W: Write,
+    F: FnOnce() -> std::result::Result<Value, OfficeError>,
+{
+    emit_progress_if_requested(
+        writer,
+        progress,
+        profile,
+        "office_launch",
+        OfficePhase::FirstLaunch,
+        "running",
+        "office_cold_start",
+    )?;
+    match run() {
+        Ok(value) => {
+            emit_progress_if_requested(
+                writer,
+                progress,
+                profile,
+                "office_launch",
+                OfficePhase::FirstLaunch,
+                "success",
+                "office_launch_remoteapp",
+            )?;
+            Ok(value)
+        }
+        Err(error) => {
+            emit_progress_if_requested(
+                writer,
+                progress,
+                profile,
+                "office_launch",
                 error.fields().phase,
                 "error",
                 &error.to_string(),
@@ -516,6 +557,26 @@ mod tests {
             lines.last().expect("envelope should be last")["error"]["code"],
             OfficeError::BYOL_NOT_ACCEPTED
         );
+    }
+
+    #[test]
+    fn office_launch_progress_jsonl_emits_cold_start_and_remoteapp_steps() {
+        let mut out = Vec::new();
+        let value =
+            run_launch_with_progress(&mut out, Some(ProgressFormat::Jsonl), "office", || {
+                Ok(json!({ "appId": "excel", "delegatedTo": "excel-o365" }))
+            })
+            .expect("launch progress wrapper should return value");
+        let lines = json_lines(&out);
+
+        assert_eq!(value["appId"], "excel");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["operation"], "office_launch");
+        assert_eq!(lines[0]["phase"], "first_launch");
+        assert_eq!(lines[0]["status"], "running");
+        assert_eq!(lines[0]["message"], "office_cold_start");
+        assert_eq!(lines[1]["status"], "success");
+        assert_eq!(lines[1]["message"], "office_launch_remoteapp");
     }
 
     #[test]

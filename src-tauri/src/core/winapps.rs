@@ -101,6 +101,7 @@ pub struct WinAppsCommandOutput {
 pub trait WinAppsClient {
     fn git(&self, cwd: Option<&Path>, args: &[String]) -> Result<WinAppsCommandOutput>;
     fn setup(&self, source_dir: &Path, args: &[String]) -> Result<WinAppsCommandOutput>;
+    fn launch(&self, launcher: &str, files: &[String]) -> Result<WinAppsCommandOutput>;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -127,6 +128,15 @@ impl WinAppsClient for CliWinAppsClient {
             .output()
             .map(command_output)
             .with_context(|| format!("executando WinApps setup em {}", source_dir.display()))
+    }
+
+    fn launch(&self, launcher: &str, files: &[String]) -> Result<WinAppsCommandOutput> {
+        Command::new("winapps")
+            .arg(launcher)
+            .args(files)
+            .output()
+            .map(command_output)
+            .with_context(|| format!("executando launcher WinApps {launcher}"))
     }
 }
 
@@ -202,6 +212,14 @@ pub struct WinAppsSetup {
     pub config_path: PathBuf,
     pub commit: String,
     pub launchers: Vec<String>,
+    pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinAppsLaunch {
+    pub launcher: String,
+    pub files: Vec<String>,
     pub exit_code: i32,
 }
 
@@ -529,6 +547,59 @@ pub fn office_app_for_launcher(launcher: &str) -> Option<&'static str> {
         .iter()
         .find(|app| app.launcher == launcher)
         .map(|app| app.app_id)
+}
+
+pub fn launcher_for_app_id(app_id: &str) -> Option<&'static str> {
+    OFFICE_DESKTOP_APPS
+        .iter()
+        .find(|app| app.app_id == app_id)
+        .map(|app| app.launcher)
+}
+
+pub fn launch_office_app(
+    client: &dyn WinAppsClient,
+    app_id: &str,
+    files: &[String],
+) -> std::result::Result<WinAppsLaunch, OfficeError> {
+    let launcher = launcher_for_app_id(app_id).ok_or_else(|| {
+        OfficeError::new(
+            OfficeError::APP_NOT_REGISTERED,
+            OfficePhase::FirstLaunch,
+            false,
+            Some(serde_json::json!({ "appId": app_id })),
+        )
+    })?;
+    let output = client.launch(launcher, files).map_err(|err| {
+        OfficeError::new(
+            OfficeError::APP_LAUNCH_FAILED,
+            OfficePhase::FirstLaunch,
+            true,
+            Some(serde_json::json!({
+                "appId": app_id,
+                "launcher": launcher,
+                "detail": format!("{err:#}"),
+            })),
+        )
+    })?;
+    if !output.success {
+        return Err(OfficeError::new(
+            OfficeError::APP_LAUNCH_FAILED,
+            OfficePhase::FirstLaunch,
+            true,
+            Some(serde_json::json!({
+                "appId": app_id,
+                "launcher": launcher,
+                "exitCode": output.status_code,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+            })),
+        ));
+    }
+    Ok(WinAppsLaunch {
+        launcher: launcher.to_string(),
+        files: files.to_vec(),
+        exit_code: output.status_code.unwrap_or(0),
+    })
 }
 
 pub fn desktop_exec_command(profile: &str, launcher: &str) -> Result<String> {
@@ -1397,6 +1468,7 @@ pub mod mock {
     pub struct MockWinAppsClient {
         git_outputs: RefCell<VecDeque<WinAppsCommandOutput>>,
         setup_outputs: RefCell<VecDeque<WinAppsCommandOutput>>,
+        launch_outputs: RefCell<VecDeque<WinAppsCommandOutput>>,
         calls: RefCell<Vec<String>>,
     }
 
@@ -1411,6 +1483,10 @@ pub mod mock {
 
         pub fn push_setup(&self, output: WinAppsCommandOutput) {
             self.setup_outputs.borrow_mut().push_back(output);
+        }
+
+        pub fn push_launch(&self, output: WinAppsCommandOutput) {
+            self.launch_outputs.borrow_mut().push_back(output);
         }
 
         pub fn calls(&self) -> Vec<String> {
@@ -1437,6 +1513,14 @@ pub mod mock {
                 .borrow_mut()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("setup output não configurado"))
+        }
+
+        fn launch(&self, launcher: &str, files: &[String]) -> Result<WinAppsCommandOutput> {
+            self.record(format!("launch:{}:{}", launcher, files.join(",")));
+            self.launch_outputs
+                .borrow_mut()
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("launch output não configurado"))
         }
     }
 }
