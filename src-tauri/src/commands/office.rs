@@ -603,6 +603,26 @@ pub fn configure_winapps(profile: &str) -> Result<OfficeProvisioningState> {
     configure_winapps_with_client(profile, &CliWinAppsClient)
 }
 
+pub fn register_desktop(profile: &str) -> Result<OfficeProvisioningState> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    register_desktop_at(profile, &profile_dir, &winapps::desktop_applications_dir())
+}
+
+pub fn register_file_associations(profile: &str) -> Result<OfficeProvisioningState> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    register_file_associations_at(profile, &profile_dir, &winapps::mimeapps_path())
+}
+
+pub fn final_verify(profile: &str) -> Result<OfficeProvisioningState> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    final_verify_at(
+        profile,
+        &profile_dir,
+        &winapps::desktop_applications_dir(),
+        &winapps::mimeapps_path(),
+    )
+}
+
 pub fn stage_odt_with_host(profile: &str, host: &dyn OdtHost) -> Result<OfficeProvisioningState> {
     let profile_dir = paths::profile_cfg_dir(profile);
     let env_path = paths::profile_env_file(profile);
@@ -988,6 +1008,112 @@ fn configure_winapps_at(
     }
 }
 
+fn register_desktop_at(
+    profile: &str,
+    profile_dir: &Path,
+    applications_dir: &Path,
+) -> Result<OfficeProvisioningState> {
+    let mut state = OfficeProvisioningState::load_or_default(profile_dir, profile)?;
+    if state.phase_status(OfficePhase::DesktopRegistration) == Some(PhaseStatus::Done) {
+        return Ok(state);
+    }
+    if state.phase_status(OfficePhase::WinappsConfig) != Some(PhaseStatus::Done) {
+        return fail_desktop_registration(
+            state,
+            profile_dir,
+            OfficeError::new(
+                OfficeError::DESKTOP_REGISTRATION_FAILED,
+                OfficePhase::DesktopRegistration,
+                true,
+                Some(serde_json::json!({
+                    "detail": "A fase desktop_registration exige winapps_config concluída.",
+                })),
+            ),
+        );
+    }
+    state.mark_phase_running(OfficePhase::DesktopRegistration)?;
+
+    match winapps::register_desktop_launchers(profile, applications_dir) {
+        Ok(registration) => {
+            mark_desktop_registration_done(&mut state, registration)?;
+            state.save_to_dir(profile_dir)?;
+            Ok(state)
+        }
+        Err(err) => fail_desktop_registration(state, profile_dir, err),
+    }
+}
+
+fn register_file_associations_at(
+    profile: &str,
+    profile_dir: &Path,
+    mimeapps_path: &Path,
+) -> Result<OfficeProvisioningState> {
+    let mut state = OfficeProvisioningState::load_or_default(profile_dir, profile)?;
+    if state.phase_status(OfficePhase::FileAssociation) == Some(PhaseStatus::Done) {
+        return Ok(state);
+    }
+    if state.phase_status(OfficePhase::DesktopRegistration) != Some(PhaseStatus::Done) {
+        return fail_file_association(
+            state,
+            profile_dir,
+            OfficeError::new(
+                OfficeError::FILE_ASSOCIATION_FAILED,
+                OfficePhase::FileAssociation,
+                true,
+                Some(serde_json::json!({
+                    "detail": "A fase file_association exige desktop_registration concluída.",
+                })),
+            ),
+        );
+    }
+    state.mark_phase_running(OfficePhase::FileAssociation)?;
+
+    match winapps::register_mime_associations(mimeapps_path) {
+        Ok(registration) => {
+            mark_file_association_done(&mut state, registration)?;
+            state.save_to_dir(profile_dir)?;
+            Ok(state)
+        }
+        Err(err) => fail_file_association(state, profile_dir, err),
+    }
+}
+
+fn final_verify_at(
+    profile: &str,
+    profile_dir: &Path,
+    applications_dir: &Path,
+    mimeapps_path: &Path,
+) -> Result<OfficeProvisioningState> {
+    let mut state = OfficeProvisioningState::load_or_default(profile_dir, profile)?;
+    if state.phase_status(OfficePhase::FinalVerify) == Some(PhaseStatus::Done) {
+        return Ok(state);
+    }
+    if state.phase_status(OfficePhase::FileAssociation) != Some(PhaseStatus::Done) {
+        return fail_final_verify(
+            state,
+            profile_dir,
+            OfficeError::new(
+                OfficeError::FILE_ASSOCIATION_FAILED,
+                OfficePhase::FinalVerify,
+                true,
+                Some(serde_json::json!({
+                    "detail": "A fase final_verify exige file_association concluída.",
+                })),
+            ),
+        );
+    }
+    state.mark_phase_running(OfficePhase::FinalVerify)?;
+
+    match winapps::final_verify(&state, applications_dir, mimeapps_path) {
+        Ok(report) => {
+            mark_final_verify_done(&mut state, report)?;
+            state.save_to_dir(profile_dir)?;
+            Ok(state)
+        }
+        Err(err) => fail_final_verify(state, profile_dir, err),
+    }
+}
+
 fn mark_winapps_done(
     state: &mut OfficeProvisioningState,
     setup: winapps::WinAppsSetup,
@@ -1009,6 +1135,61 @@ fn mark_winapps_done(
     )
 }
 
+fn mark_desktop_registration_done(
+    state: &mut OfficeProvisioningState,
+    registration: winapps::DesktopRegistration,
+) -> Result<()> {
+    state.managed_paths.desktop_files = registration.desktop_files.clone();
+    state.mark_phase_done(
+        OfficePhase::DesktopRegistration,
+        Some(PhaseEvidence {
+            files: registration.desktop_files,
+            launcher_ids: registration.launchers,
+            ..PhaseEvidence::default()
+        }),
+    )
+}
+
+fn mark_file_association_done(
+    state: &mut OfficeProvisioningState,
+    registration: winapps::FileAssociationRegistration,
+) -> Result<()> {
+    state.managed_paths.mime_types = registration.mime_types.clone();
+    state.mark_phase_done(
+        OfficePhase::FileAssociation,
+        Some(PhaseEvidence {
+            files: registration.desktop_files,
+            registry: Some(serde_json::json!({
+                "extensions": registration.extensions,
+                "mimeTypes": registration.mime_types,
+            })),
+            ..PhaseEvidence::default()
+        }),
+    )
+}
+
+fn mark_final_verify_done(
+    state: &mut OfficeProvisioningState,
+    report: winapps::FinalVerifyReport,
+) -> Result<()> {
+    state.managed_paths.desktop_files = report.desktop_files.clone();
+    state.managed_paths.mime_types = report.mime_types.clone();
+    state.mark_phase_done(
+        OfficePhase::FinalVerify,
+        Some(PhaseEvidence {
+            files: report.desktop_files,
+            launcher_ids: report.launchers,
+            registry: Some(serde_json::json!({
+                "officePresent": report.office_present,
+                "rdpReady": report.rdp_ready,
+                "winappsReady": report.winapps_ready,
+                "mimeTypes": report.mime_types,
+            })),
+            ..PhaseEvidence::default()
+        }),
+    )
+}
+
 fn fail_winapps_config(
     mut state: OfficeProvisioningState,
     profile_dir: &Path,
@@ -1024,6 +1205,66 @@ fn fail_winapps_config(
     });
     state.save_to_dir(profile_dir)?;
     Err(anyhow::anyhow!(error))
+}
+
+fn fail_desktop_registration(
+    mut state: OfficeProvisioningState,
+    profile_dir: &Path,
+    error: OfficeError,
+) -> Result<OfficeProvisioningState> {
+    fail_office_host_phase(
+        &mut state,
+        OfficePhase::DesktopRegistration,
+        &error,
+        winapps::winapps_error_message(error.code()),
+    );
+    state.save_to_dir(profile_dir)?;
+    Err(anyhow::anyhow!(error))
+}
+
+fn fail_file_association(
+    mut state: OfficeProvisioningState,
+    profile_dir: &Path,
+    error: OfficeError,
+) -> Result<OfficeProvisioningState> {
+    fail_office_host_phase(
+        &mut state,
+        OfficePhase::FileAssociation,
+        &error,
+        winapps::winapps_error_message(error.code()),
+    );
+    state.save_to_dir(profile_dir)?;
+    Err(anyhow::anyhow!(error))
+}
+
+fn fail_final_verify(
+    mut state: OfficeProvisioningState,
+    profile_dir: &Path,
+    error: OfficeError,
+) -> Result<OfficeProvisioningState> {
+    fail_office_host_phase(
+        &mut state,
+        OfficePhase::FinalVerify,
+        &error,
+        winapps::winapps_error_message(error.code()),
+    );
+    state.save_to_dir(profile_dir)?;
+    Err(anyhow::anyhow!(error))
+}
+
+fn fail_office_host_phase(
+    state: &mut OfficeProvisioningState,
+    phase: OfficePhase,
+    error: &OfficeError,
+    message: &str,
+) {
+    state.mark_phase_failed(OfficeLastError {
+        code: error.code().to_string(),
+        message: message.to_string(),
+        phase,
+        retryable: error.fields().retryable,
+        details: error.fields().details.clone(),
+    });
 }
 
 #[cfg(test)]

@@ -37,7 +37,7 @@ feat/prd-winbox-office-instalavel
 | 10.0 | Expor OfficeError, comandos Tauri e progresso estruturado | FR-1.3, FR-4.5 | 2.0, 9.0 | Concluída |
 | 11.0 | Implementar CLI `winbox office` com envelope preservado | FR-1.3, FR-5.6 | 10.0 | Concluída |
 | 12.0 | Integrar WinApps gerenciado, configuração e setup | FR-3.5, FR-5.3 | 5.0, 9.0, 10.0 | Concluída |
-| 13.0 | Registrar desktop, MIME e verificação final | FR-5.4, FR-5.5 | 12.0 | Pendente |
+| 13.0 | Registrar desktop, MIME e verificação final | FR-5.4, FR-5.5 | 12.0 | Concluída |
 | 14.0 | Detectar adoção manual e revisão segura | FR-6.3, FR-6.4 | 2.0, 10.0, 12.0 | Pendente |
 | 15.0 | Remover perfil Office com confirmação e sem destruição acidental | FR-6.5, FR-7.5 | 11.0, 12.0, 13.0, 14.0 | Pendente |
 | 16.0 | Implementar launcher Office, progresso GUI e validação de arquivos | FR-7.4, FR-7.7 | 10.0, 11.0, 12.0, 13.0 | Pendente |
@@ -69,7 +69,7 @@ feat/prd-winbox-office-instalavel
 - [x] 10.0 Expor OfficeError, comandos Tauri e progresso estruturado
 - [x] 11.0 Implementar CLI `winbox office` com envelope preservado
 - [x] 12.0 Integrar WinApps gerenciado, configuração e setup
-- [ ] 13.0 Registrar desktop, MIME e verificação final
+- [x] 13.0 Registrar desktop, MIME e verificação final
 - [ ] 14.0 Detectar adoção manual e revisão segura
 - [ ] 15.0 Remover perfil Office com confirmação e sem destruição acidental
 - [ ] 16.0 Implementar launcher Office, progresso GUI e validação de arquivos

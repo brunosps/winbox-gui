@@ -577,6 +577,55 @@ mod tests {
     }
 
     #[test]
+    fn retry_winapps_config_reexecutes_desktop_registration_and_final_verify() {
+        let mut state = OfficeProvisioningState::new("office");
+        for phase in [
+            OfficePhase::OfficeInstall,
+            OfficePhase::WinappsConfig,
+            OfficePhase::DesktopRegistration,
+            OfficePhase::FileAssociation,
+            OfficePhase::FinalVerify,
+        ] {
+            state
+                .mark_phase_running(phase)
+                .expect("phase should enter running");
+            state
+                .mark_phase_done(phase, Some(sample_evidence(phase)))
+                .expect("phase should be done");
+        }
+
+        let affected = state
+            .retry_from_phase(OfficePhase::WinappsConfig)
+            .expect("winapps_config retry should be safe");
+
+        assert_eq!(
+            affected,
+            vec![
+                OfficePhase::WinappsConfig,
+                OfficePhase::DesktopRegistration,
+                OfficePhase::FileAssociation,
+                OfficePhase::FinalVerify,
+                OfficePhase::FirstLaunch,
+            ]
+        );
+        assert_eq!(
+            state.phase_status(OfficePhase::OfficeInstall),
+            Some(PhaseStatus::Done)
+        );
+        for phase in [
+            OfficePhase::WinappsConfig,
+            OfficePhase::DesktopRegistration,
+            OfficePhase::FileAssociation,
+            OfficePhase::FinalVerify,
+            OfficePhase::FirstLaunch,
+        ] {
+            let phase_state = state.phases.get(&phase).expect("phase exists");
+            assert_eq!(phase_state.status, PhaseStatus::Pending);
+            assert!(phase_state.evidence.is_none());
+        }
+    }
+
+    #[test]
     fn retry_refused_for_unsafe_phase() {
         let mut state = OfficeProvisioningState::new("office");
         state

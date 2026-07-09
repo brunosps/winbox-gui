@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -19,6 +20,75 @@ pub const WINAPPS_RDP_TIMEOUT: u32 = 120;
 pub const WINAPPS_APP_SCAN_TIMEOUT: u32 = 300;
 pub const WINAPPS_BOOT_TIMEOUT: u32 = 600;
 pub const OFFICE_LAUNCHERS: [&str; 3] = ["excel-o365", "word-o365", "powerpoint-o365"];
+pub const OFFICE_OBSERVABLE_DESKTOP_FIELDS: [&str; 5] =
+    ["Icon", "Name", "StartupWMClass", "Categories", "MimeType"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeDesktopApp {
+    pub launcher: &'static str,
+    pub app_id: &'static str,
+    pub executable: &'static str,
+}
+
+pub const OFFICE_DESKTOP_APPS: [OfficeDesktopApp; 3] = [
+    OfficeDesktopApp {
+        launcher: "excel-o365",
+        app_id: "excel",
+        executable: r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE",
+    },
+    OfficeDesktopApp {
+        launcher: "word-o365",
+        app_id: "word",
+        executable: r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
+    },
+    OfficeDesktopApp {
+        launcher: "powerpoint-o365",
+        app_id: "powerpoint",
+        executable: r"C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeMimeAssociation {
+    pub extension: &'static str,
+    pub mime_type: &'static str,
+    pub launcher: &'static str,
+}
+
+pub const OFFICE_MIME_ASSOCIATIONS: [OfficeMimeAssociation; 6] = [
+    OfficeMimeAssociation {
+        extension: ".xls",
+        mime_type: "application/vnd.ms-excel",
+        launcher: "excel-o365",
+    },
+    OfficeMimeAssociation {
+        extension: ".xlsx",
+        mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        launcher: "excel-o365",
+    },
+    OfficeMimeAssociation {
+        extension: ".doc",
+        mime_type: "application/msword",
+        launcher: "word-o365",
+    },
+    OfficeMimeAssociation {
+        extension: ".docx",
+        mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        launcher: "word-o365",
+    },
+    OfficeMimeAssociation {
+        extension: ".ppt",
+        mime_type: "application/vnd.ms-powerpoint",
+        launcher: "powerpoint-o365",
+    },
+    OfficeMimeAssociation {
+        extension: ".pptx",
+        mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        launcher: "powerpoint-o365",
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WinAppsCommandOutput {
@@ -135,12 +205,56 @@ pub struct WinAppsSetup {
     pub exit_code: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRegistration {
+    pub launchers: Vec<String>,
+    pub desktop_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAssociationRegistration {
+    pub extensions: Vec<String>,
+    pub mime_types: Vec<String>,
+    pub desktop_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinalVerifyReport {
+    pub office_present: bool,
+    pub rdp_ready: bool,
+    pub winapps_ready: bool,
+    pub launchers: Vec<String>,
+    pub desktop_files: Vec<String>,
+    pub mime_types: Vec<String>,
+}
+
 pub fn managed_source_dir() -> PathBuf {
     paths::data_dir().join("winapps")
 }
 
 pub fn winapps_conf_path() -> PathBuf {
     paths::home().join(WINAPPS_CONF_RELATIVE)
+}
+
+pub fn desktop_applications_dir() -> PathBuf {
+    paths::apps_dir()
+}
+
+pub fn mimeapps_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        paths::config_dir().join("mimeapps.list")
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| paths::home().join(".config"))
+            .join("mimeapps.list")
+    }
 }
 
 pub fn configure_winapps(
@@ -282,6 +396,217 @@ pub fn uninstall(
     }
 }
 
+pub fn office_app_for_launcher(launcher: &str) -> Option<&'static str> {
+    OFFICE_DESKTOP_APPS
+        .iter()
+        .find(|app| app.launcher == launcher)
+        .map(|app| app.app_id)
+}
+
+pub fn desktop_exec_command(profile: &str, launcher: &str) -> Result<String> {
+    let app_id = office_app_for_launcher(launcher)
+        .with_context(|| format!("launcher Office desconhecido: {launcher}"))?;
+    Ok(format!(
+        "winbox office launch {profile} {app_id} --gui-progress -- %F"
+    ))
+}
+
+pub fn patch_desktop_exec(content: &str, profile: &str, launcher: &str) -> Result<String> {
+    let exec = desktop_exec_command(profile, launcher)?;
+    let mut out = String::with_capacity(content.len() + exec.len());
+    let mut found_exec = false;
+
+    for raw_line in split_lines_preserving_newline(content) {
+        let (line, newline) = raw_line;
+        if line.starts_with("Exec=") {
+            if found_exec {
+                bail!("desktop possui mais de uma linha Exec");
+            }
+            out.push_str("Exec=");
+            out.push_str(&exec);
+            out.push_str(newline);
+            found_exec = true;
+        } else {
+            out.push_str(line);
+            out.push_str(newline);
+        }
+    }
+
+    if !found_exec {
+        bail!("desktop sem linha Exec");
+    }
+    Ok(out)
+}
+
+pub fn register_desktop_launchers(
+    profile: &str,
+    applications_dir: &Path,
+) -> std::result::Result<DesktopRegistration, OfficeError> {
+    for app in OFFICE_DESKTOP_APPS {
+        let path = desktop_file_path(applications_dir, app.launcher);
+        let content = std::fs::read_to_string(&path).map_err(|err| {
+            desktop_registration_error(
+                OfficePhase::DesktopRegistration,
+                app.launcher,
+                &path,
+                format!("não foi possível ler o desktop: {err}"),
+            )
+        })?;
+        let patched = patch_desktop_exec(&content, profile, app.launcher).map_err(|err| {
+            desktop_registration_error(
+                OfficePhase::DesktopRegistration,
+                app.launcher,
+                &path,
+                format!("{err:#}"),
+            )
+        })?;
+        if patched != content {
+            std::fs::write(&path, patched).map_err(|err| {
+                desktop_registration_error(
+                    OfficePhase::DesktopRegistration,
+                    app.launcher,
+                    &path,
+                    format!("não foi possível escrever o desktop: {err}"),
+                )
+            })?;
+        }
+    }
+    verify_desktop_entries(profile, applications_dir)
+}
+
+pub fn verify_desktop_entries(
+    profile: &str,
+    applications_dir: &Path,
+) -> std::result::Result<DesktopRegistration, OfficeError> {
+    verify_desktop_entries_for_phase(profile, applications_dir, OfficePhase::DesktopRegistration)
+}
+
+pub fn render_mimeapps_list(existing: &str) -> String {
+    let required = required_mime_defaults();
+    let mut out = Vec::new();
+    let mut in_default_applications = false;
+    let mut saw_default_applications = false;
+    let mut inserted_defaults = false;
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_default_applications && !inserted_defaults {
+                append_required_mime_defaults(&mut out);
+                inserted_defaults = true;
+            }
+            in_default_applications = trimmed == "[Default Applications]";
+            saw_default_applications |= in_default_applications;
+            out.push(line.to_string());
+            continue;
+        }
+
+        if in_default_applications {
+            let key = line.split_once('=').map(|(key, _)| key.trim());
+            if key.is_some_and(|key| required.contains_key(key)) {
+                continue;
+            }
+        }
+        out.push(line.to_string());
+    }
+
+    if in_default_applications && !inserted_defaults {
+        append_required_mime_defaults(&mut out);
+    }
+    if !saw_default_applications {
+        if out.last().is_some_and(|line| !line.is_empty()) {
+            out.push(String::new());
+        }
+        out.push("[Default Applications]".to_string());
+        append_required_mime_defaults(&mut out);
+    }
+
+    let mut rendered = out.join("\n");
+    rendered.push('\n');
+    rendered
+}
+
+pub fn register_mime_associations(
+    mimeapps_path: &Path,
+) -> std::result::Result<FileAssociationRegistration, OfficeError> {
+    let existing = match std::fs::read_to_string(mimeapps_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(file_association_error(
+                OfficePhase::FileAssociation,
+                format!("não foi possível ler {}: {err}", mimeapps_path.display()),
+            ));
+        }
+    };
+    let rendered = render_mimeapps_list(&existing);
+    if let Some(parent) = mimeapps_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            file_association_error(
+                OfficePhase::FileAssociation,
+                format!("não foi possível criar {}: {err}", parent.display()),
+            )
+        })?;
+    }
+    std::fs::write(mimeapps_path, &rendered).map_err(|err| {
+        file_association_error(
+            OfficePhase::FileAssociation,
+            format!(
+                "não foi possível escrever {}: {err}",
+                mimeapps_path.display()
+            ),
+        )
+    })?;
+    verify_mime_associations_content(&rendered)
+}
+
+pub fn verify_mime_associations_content(
+    content: &str,
+) -> std::result::Result<FileAssociationRegistration, OfficeError> {
+    verify_mime_associations_content_for_phase(content, OfficePhase::FileAssociation)
+}
+
+pub fn final_verify(
+    state: &super::office_state::OfficeProvisioningState,
+    applications_dir: &Path,
+    mimeapps_path: &Path,
+) -> std::result::Result<FinalVerifyReport, OfficeError> {
+    ensure_office_install_evidence(state)?;
+    ensure_phase_done(
+        state,
+        OfficePhase::RemoteappPrepare,
+        OfficeError::GUEST_REMOTEAPP_NOT_PREPARED,
+    )?;
+    ensure_phase_done(
+        state,
+        OfficePhase::WinappsConfig,
+        OfficeError::APP_NOT_REGISTERED,
+    )?;
+    ensure_winapps_launchers(state)?;
+
+    let desktop = verify_desktop_entries_for_phase(
+        &state.profile,
+        applications_dir,
+        OfficePhase::FinalVerify,
+    )?;
+    let mime_content = std::fs::read_to_string(mimeapps_path).map_err(|err| {
+        file_association_error(
+            OfficePhase::FinalVerify,
+            format!("não foi possível ler {}: {err}", mimeapps_path.display()),
+        )
+    })?;
+    let mime = verify_mime_associations_content_for_phase(&mime_content, OfficePhase::FinalVerify)?;
+
+    Ok(FinalVerifyReport {
+        office_present: true,
+        rdp_ready: true,
+        winapps_ready: true,
+        launchers: desktop.launchers,
+        desktop_files: desktop.desktop_files,
+        mime_types: mime.mime_types,
+    })
+}
+
 pub fn render_winapps_conf(config: &WinAppsConfig) -> Result<String> {
     let entries = [
         ("RDP_USER", shell_single_quote(&config.rdp_user)?),
@@ -348,8 +673,311 @@ pub fn winapps_error_message(code: &str) -> &'static str {
         OfficeError::WINAPPS_RDP_FAILED => "WinApps não conseguiu autenticar via RDP.",
         OfficeError::WINAPPS_APP_SCAN_FAILED => "WinApps não conseguiu detectar apps instalados.",
         OfficeError::WINAPPS_PIN_MISMATCH => "WinApps não permaneceu no commit pinado.",
+        OfficeError::DESKTOP_REGISTRATION_FAILED => {
+            "Falha ao registrar atalhos .desktop do Office."
+        }
+        OfficeError::FILE_ASSOCIATION_FAILED => {
+            "Falha ao registrar associações de arquivo do Office."
+        }
+        OfficeError::APP_NOT_REGISTERED => "WinApps não registrou os launchers Office esperados.",
+        OfficeError::OFFICE_DETECTION_FAILED => {
+            "Office não passou na verificação ClickToRun e executáveis."
+        }
+        OfficeError::GUEST_REMOTEAPP_NOT_PREPARED => "RemoteApp/RDP não está preparado.",
         _ => "Falha na configuração WinApps.",
     }
+}
+
+fn verify_desktop_entries_for_phase(
+    profile: &str,
+    applications_dir: &Path,
+    phase: OfficePhase,
+) -> std::result::Result<DesktopRegistration, OfficeError> {
+    let mut launchers = Vec::with_capacity(OFFICE_DESKTOP_APPS.len());
+    let mut desktop_files = Vec::with_capacity(OFFICE_DESKTOP_APPS.len());
+
+    for app in OFFICE_DESKTOP_APPS {
+        let path = desktop_file_path(applications_dir, app.launcher);
+        let content = std::fs::read_to_string(&path).map_err(|err| {
+            desktop_registration_error(
+                phase,
+                app.launcher,
+                &path,
+                format!("não foi possível ler o desktop: {err}"),
+            )
+        })?;
+        let missing_fields = missing_observable_desktop_fields(&content);
+        if !missing_fields.is_empty() {
+            return Err(desktop_registration_error(
+                phase,
+                app.launcher,
+                &path,
+                format!("campos observáveis ausentes: {}", missing_fields.join(", ")),
+            ));
+        }
+        if !desktop_has_wrapper_exec(&content, profile, app.launcher).map_err(|err| {
+            desktop_registration_error(phase, app.launcher, &path, format!("{err:#}"))
+        })? {
+            return Err(desktop_registration_error(
+                phase,
+                app.launcher,
+                &path,
+                "Exec não aponta para o wrapper winbox office launch".to_string(),
+            ));
+        }
+        launchers.push(app.launcher.to_string());
+        desktop_files.push(path.display().to_string());
+    }
+
+    Ok(DesktopRegistration {
+        launchers,
+        desktop_files,
+    })
+}
+
+fn verify_mime_associations_content_for_phase(
+    content: &str,
+    phase: OfficePhase,
+) -> std::result::Result<FileAssociationRegistration, OfficeError> {
+    let defaults = parse_mime_defaults(content);
+    let mut extensions = Vec::with_capacity(OFFICE_MIME_ASSOCIATIONS.len());
+    let mut mime_types = Vec::with_capacity(OFFICE_MIME_ASSOCIATIONS.len());
+    let mut desktop_files = Vec::with_capacity(OFFICE_MIME_ASSOCIATIONS.len());
+
+    for association in OFFICE_MIME_ASSOCIATIONS {
+        let desktop_id = desktop_id(association.launcher);
+        let registered = defaults
+            .get(association.mime_type)
+            .map(|value| {
+                value
+                    .split(';')
+                    .map(str::trim)
+                    .any(|entry| entry == desktop_id)
+            })
+            .unwrap_or(false);
+        if !registered {
+            return Err(file_association_error(
+                phase,
+                format!(
+                    "{} precisa apontar para {}",
+                    association.mime_type, desktop_id
+                ),
+            ));
+        }
+        extensions.push(association.extension.to_string());
+        mime_types.push(association.mime_type.to_string());
+        desktop_files.push(desktop_id.to_string());
+    }
+
+    Ok(FileAssociationRegistration {
+        extensions,
+        mime_types,
+        desktop_files,
+    })
+}
+
+fn ensure_phase_done(
+    state: &super::office_state::OfficeProvisioningState,
+    phase: OfficePhase,
+    code: &str,
+) -> std::result::Result<(), OfficeError> {
+    if state.phase_status(phase) == Some(super::office_state::PhaseStatus::Done) {
+        return Ok(());
+    }
+    Err(OfficeError::new(
+        code,
+        OfficePhase::FinalVerify,
+        true,
+        Some(serde_json::json!({
+            "requiredPhase": phase,
+            "status": state.phase_status(phase),
+        })),
+    ))
+}
+
+fn ensure_winapps_launchers(
+    state: &super::office_state::OfficeProvisioningState,
+) -> std::result::Result<(), OfficeError> {
+    let launchers = state
+        .phases
+        .get(&OfficePhase::WinappsConfig)
+        .and_then(|phase| phase.evidence.as_ref())
+        .map(|evidence| evidence.launcher_ids.as_slice())
+        .unwrap_or(&[]);
+    for expected in OFFICE_LAUNCHERS {
+        if !launchers.iter().any(|launcher| launcher == expected) {
+            return Err(OfficeError::new(
+                OfficeError::APP_NOT_REGISTERED,
+                OfficePhase::FinalVerify,
+                true,
+                Some(serde_json::json!({
+                    "launcher": expected,
+                    "registeredLaunchers": launchers,
+                })),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_office_install_evidence(
+    state: &super::office_state::OfficeProvisioningState,
+) -> std::result::Result<(), OfficeError> {
+    ensure_phase_done(
+        state,
+        OfficePhase::OfficeInstall,
+        OfficeError::OFFICE_DETECTION_FAILED,
+    )?;
+    let evidence = state
+        .phases
+        .get(&OfficePhase::OfficeInstall)
+        .and_then(|phase| phase.evidence.as_ref());
+    let has_registry = evidence
+        .and_then(|evidence| evidence.registry.as_ref())
+        .is_some();
+    let files = evidence
+        .map(|evidence| evidence.files.as_slice())
+        .unwrap_or(&[]);
+    let has_excel = files.iter().any(|file| file.ends_with("EXCEL.EXE"));
+    let has_word = files.iter().any(|file| file.ends_with("WINWORD.EXE"));
+    let has_powerpoint = files.iter().any(|file| file.ends_with("POWERPNT.EXE"));
+
+    if has_registry && has_excel && has_word && has_powerpoint {
+        return Ok(());
+    }
+    Err(OfficeError::new(
+        OfficeError::OFFICE_DETECTION_FAILED,
+        OfficePhase::FinalVerify,
+        true,
+        Some(serde_json::json!({
+            "detail": "office_install não tem evidência completa de registry ClickToRun e executáveis x64.",
+            "hasRegistry": has_registry,
+            "hasExcel": has_excel,
+            "hasWord": has_word,
+            "hasPowerPoint": has_powerpoint,
+        })),
+    ))
+}
+
+fn desktop_has_wrapper_exec(content: &str, profile: &str, launcher: &str) -> Result<bool> {
+    let expected = format!("Exec={}", desktop_exec_command(profile, launcher)?);
+    Ok(content
+        .lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .any(|line| line == expected))
+}
+
+fn missing_observable_desktop_fields(content: &str) -> Vec<&'static str> {
+    OFFICE_OBSERVABLE_DESKTOP_FIELDS
+        .into_iter()
+        .filter(|field| {
+            desktop_field(content, field)
+                .map(str::trim)
+                .map_or(true, str::is_empty)
+        })
+        .collect()
+}
+
+fn desktop_field<'a>(content: &'a str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    content
+        .lines()
+        .find_map(|line| line.trim_end_matches('\r').strip_prefix(&prefix))
+}
+
+fn split_lines_preserving_newline(content: &str) -> Vec<(&str, &str)> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    content
+        .split_inclusive('\n')
+        .map(|segment| {
+            if let Some(line) = segment.strip_suffix("\r\n") {
+                (line, "\r\n")
+            } else if let Some(line) = segment.strip_suffix('\n') {
+                (line, "\n")
+            } else {
+                (segment, "")
+            }
+        })
+        .collect()
+}
+
+fn desktop_file_path(applications_dir: &Path, launcher: &str) -> PathBuf {
+    applications_dir.join(desktop_id(launcher))
+}
+
+fn desktop_id(launcher: &str) -> String {
+    format!("{launcher}.desktop")
+}
+
+fn append_required_mime_defaults(out: &mut Vec<String>) {
+    for association in OFFICE_MIME_ASSOCIATIONS {
+        out.push(format!(
+            "{}={}",
+            association.mime_type,
+            desktop_id(association.launcher)
+        ));
+    }
+}
+
+fn required_mime_defaults() -> BTreeMap<&'static str, String> {
+    OFFICE_MIME_ASSOCIATIONS
+        .into_iter()
+        .map(|association| (association.mime_type, desktop_id(association.launcher)))
+        .collect()
+}
+
+fn parse_mime_defaults(content: &str) -> BTreeMap<String, String> {
+    let mut defaults = BTreeMap::new();
+    let mut in_default_applications = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_default_applications = trimmed == "[Default Applications]";
+            continue;
+        }
+        if !in_default_applications || trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once('=') {
+            defaults.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    defaults
+}
+
+fn desktop_registration_error(
+    phase: OfficePhase,
+    launcher: &str,
+    path: &Path,
+    detail: String,
+) -> OfficeError {
+    OfficeError::new(
+        OfficeError::DESKTOP_REGISTRATION_FAILED,
+        phase,
+        true,
+        Some(serde_json::json!({
+            "launcher": launcher,
+            "desktopPath": path,
+            "detail": detail,
+        })),
+    )
+}
+
+fn file_association_error(phase: OfficePhase, detail: String) -> OfficeError {
+    OfficeError::new(
+        OfficeError::FILE_ASSOCIATION_FAILED,
+        phase,
+        true,
+        Some(serde_json::json!({
+            "detail": detail,
+            "mimeTypes": OFFICE_MIME_ASSOCIATIONS
+                .iter()
+                .map(|association| association.mime_type)
+                .collect::<Vec<_>>(),
+        })),
+    )
 }
 
 fn write_winapps_conf(path: &Path, config: &WinAppsConfig) -> Result<()> {
@@ -508,6 +1136,7 @@ pub mod mock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::office_state::{OfficeProvisioningState, PhaseEvidence};
     use mock::MockWinAppsClient;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -583,6 +1212,101 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn desktop_patch_preserves_observable_fields() {
+        let original = desktop_content("excel-o365", "Microsoft Excel");
+
+        let patched =
+            patch_desktop_exec(&original, "office", "excel-o365").expect("patch should pass");
+
+        assert!(patched.contains("Exec=winbox office launch office excel --gui-progress -- %F\n"));
+        for field in OFFICE_OBSERVABLE_DESKTOP_FIELDS {
+            assert_eq!(
+                desktop_field(&patched, field),
+                desktop_field(&original, field),
+                "{field} should be preserved"
+            );
+        }
+        let original_non_exec = original
+            .lines()
+            .filter(|line| !line.starts_with("Exec="))
+            .collect::<Vec<_>>();
+        let patched_non_exec = patched
+            .lines()
+            .filter(|line| !line.starts_with("Exec="))
+            .collect::<Vec<_>>();
+        assert_eq!(patched_non_exec, original_non_exec);
+
+        let malformed = "[Desktop Entry]\nName=Microsoft Excel\n";
+        assert!(patch_desktop_exec(malformed, "office", "excel-o365").is_err());
+    }
+
+    #[test]
+    fn mime_registration_maps_all_required_extensions() {
+        let rendered = render_mimeapps_list("[Added Associations]\ntext/plain=code.desktop;\n");
+        let registration =
+            verify_mime_associations_content(&rendered).expect("required MIME entries should pass");
+
+        assert_eq!(
+            registration.extensions,
+            vec![".xls", ".xlsx", ".doc", ".docx", ".ppt", ".pptx"]
+        );
+        assert!(rendered.contains("application/vnd.ms-excel=excel-o365.desktop\n"));
+        assert!(rendered.contains(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document=word-o365.desktop\n"
+        ));
+        assert!(rendered.contains(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation=powerpoint-o365.desktop\n"
+        ));
+        assert_eq!(render_mimeapps_list(&rendered), rendered);
+
+        let err = verify_mime_associations_content("[Default Applications]\n")
+            .expect_err("missing Office MIME mappings should fail");
+        assert_eq!(err.code(), OfficeError::FILE_ASSOCIATION_FAILED);
+    }
+
+    #[test]
+    fn final_verify_requires_desktop_and_mime_entries() {
+        let root = temp_dir("final-verify");
+        let applications_dir = root.join("applications");
+        let mimeapps = root.join("config").join("mimeapps.list");
+        std::fs::create_dir_all(&applications_dir).expect("applications dir should exist");
+        seed_office_desktops(&applications_dir);
+        register_desktop_launchers("office", &applications_dir)
+            .expect("desktop registration should patch upstream entries");
+        let state = ready_for_final_verify_state();
+
+        let err = final_verify(&state, &applications_dir, &mimeapps)
+            .expect_err("missing mimeapps.list should block final verify");
+        assert_eq!(err.code(), OfficeError::FILE_ASSOCIATION_FAILED);
+        assert_eq!(err.fields().phase, OfficePhase::FinalVerify);
+
+        std::fs::create_dir_all(mimeapps.parent().expect("mimeapps parent should exist"))
+            .expect("mimeapps parent should be created");
+        std::fs::write(&mimeapps, render_mimeapps_list("")).expect("mimeapps should be written");
+        let report =
+            final_verify(&state, &applications_dir, &mimeapps).expect("all evidence should pass");
+
+        assert!(report.office_present);
+        assert!(report.rdp_ready);
+        assert!(report.winapps_ready);
+        assert_eq!(report.launchers, OFFICE_LAUNCHERS);
+        assert_eq!(report.desktop_files.len(), 3);
+        assert_eq!(report.mime_types.len(), 6);
+
+        let mut missing_launcher = state;
+        missing_launcher
+            .phases
+            .get_mut(&OfficePhase::WinappsConfig)
+            .and_then(|phase| phase.evidence.as_mut())
+            .expect("winapps evidence should exist")
+            .launcher_ids = vec!["excel-o365".to_string()];
+        let err = final_verify(&missing_launcher, &applications_dir, &mimeapps)
+            .expect_err("missing WinApps launchers should block final verify");
+        assert_eq!(err.code(), OfficeError::APP_NOT_REGISTERED);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn sample_config(user: &str, pass: &str) -> WinAppsConfig {
         WinAppsConfig {
             rdp_user: user.to_string(),
@@ -613,6 +1337,71 @@ mod tests {
             stdout: String::new(),
             stderr: stderr.to_string(),
         }
+    }
+
+    fn desktop_content(launcher: &str, name: &str) -> String {
+        format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name={name}\n\
+             Exec=/home/bruno/.local/bin/winapps {launcher} %F\n\
+             Icon=/home/bruno/.local/share/winapps/apps/{launcher}/icon.svg\n\
+             StartupWMClass={name}\n\
+             Categories=WinApps;Office;\n\
+             MimeType=application/x-winbox-test;\n"
+        )
+    }
+
+    fn seed_office_desktops(applications_dir: &Path) {
+        let names = [
+            ("excel-o365", "Microsoft Excel"),
+            ("word-o365", "Microsoft Word"),
+            ("powerpoint-o365", "Microsoft PowerPoint"),
+        ];
+        for (launcher, name) in names {
+            std::fs::write(
+                applications_dir.join(format!("{launcher}.desktop")),
+                desktop_content(launcher, name),
+            )
+            .expect("desktop should be written");
+        }
+    }
+
+    fn ready_for_final_verify_state() -> OfficeProvisioningState {
+        let mut state = OfficeProvisioningState::new("office");
+        for phase in [
+            OfficePhase::RemoteappPrepare,
+            OfficePhase::OfficeInstall,
+            OfficePhase::WinappsConfig,
+        ] {
+            state.mark_phase_running(phase).expect("phase should run");
+            let evidence = match phase {
+                OfficePhase::OfficeInstall => Some(PhaseEvidence {
+                    files: OFFICE_DESKTOP_APPS
+                        .iter()
+                        .map(|app| app.executable.to_string())
+                        .collect(),
+                    registry: Some(serde_json::json!({
+                        "productReleaseIds": "O365ProPlusRetail",
+                        "versionToReport": "16.0.12345.67890",
+                        "platform": "x64",
+                    })),
+                    ..PhaseEvidence::default()
+                }),
+                OfficePhase::WinappsConfig => Some(PhaseEvidence {
+                    launcher_ids: OFFICE_LAUNCHERS
+                        .iter()
+                        .map(|launcher| launcher.to_string())
+                        .collect(),
+                    ..PhaseEvidence::default()
+                }),
+                _ => None,
+            };
+            state
+                .mark_phase_done(phase, evidence)
+                .expect("phase should finish");
+        }
+        state
     }
 
     fn temp_dir(name: &str) -> PathBuf {
