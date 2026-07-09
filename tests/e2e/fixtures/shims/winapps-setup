@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'winapps-setup %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+exit "${WINBOX_E2E_WINAPPS_EXIT:-0}"

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'curl %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+if [ "${WINBOX_E2E_CURL_FAIL:-0}" = "1" ]; then
+  echo "mock curl forced failure" >&2
+  exit 22
+fi
+
+echo '{"ok":true}'
+exit 0

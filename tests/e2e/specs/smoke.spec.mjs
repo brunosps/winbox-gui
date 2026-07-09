@@ -10,8 +10,8 @@ describe("winbox dashboard smoke", () => {
     // Wait for the WebView to be reachable.
     await browser.pause(2000);
 
-    // The header carries a `.brand-name` element with the product name.
-    const brand = await $(".brand-name");
+    // The current header renders the product name as the brand heading.
+    const brand = await $(".brand h1");
     await brand.waitForExist({ timeout: 10_000 });
     await expect(brand).toBeDisplayed();
     await expect(brand).toHaveText(expect.stringContaining("winbox"));
@@ -28,9 +28,9 @@ describe("winbox dashboard smoke", () => {
     // profiles visible are the ones written by the fixture setup. If no
     // fixture profiles are seeded, the dashboard shows the empty-state
     // illustration.
-    const cards = await $$(".profile-card");
-    const empty = await $(".empty-state");
-    const hasContent = (await cards.length) > 0 || (await empty.isExisting());
+    const rows = await $$(".profile-row");
+    const empty = await $(".table-empty");
+    const hasContent = rows.length > 0 || (await empty.isExisting());
     expect(hasContent).toBe(true);
   });
 });

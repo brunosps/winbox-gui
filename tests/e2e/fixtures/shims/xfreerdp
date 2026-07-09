@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'xfreerdp %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+if [ "${1:-}" = "/version" ]; then
+  echo "This is FreeRDP version 3.28.0"
+  exit 0
+fi
+
+echo "mock xfreerdp $*"
+exit 0
