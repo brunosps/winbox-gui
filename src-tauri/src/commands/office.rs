@@ -1,5 +1,6 @@
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::{
@@ -8,17 +9,40 @@ use crate::core::{
     flatpak::CliFlatpakClient,
     guest_executor::{
         self, CliGuestExecutor, GuestExecutor, GuestPhaseError, GuestPhaseTimeout,
-        GuestRemoteappNotPrepared, GUEST_REMOTEAPP_NOT_PREPARED_CODE, REMOTEAPP_ACTION_HINT,
-        REMOTEAPP_PREPARE_MARKER,
+        GuestRemoteappNotPrepared, REMOTEAPP_ACTION_HINT, REMOTEAPP_PREPARE_MARKER,
     },
+    launch_error::OfficeError,
     office_odt::{
         self, CliOdtHost, OdtHost, OfficeOdtStage, OfficeOdtStageFailed, OfficeOdtStageOptions,
-        OFFICE_INSTALL_MARKER, OFFICE_ODT_STAGE_FAILED_CODE,
+        OFFICE_INSTALL_MARKER,
     },
     office_preflight::{self, CliHostPreflight, OfficePreflightResult, Resources},
-    office_state::{OfficeLastError, OfficePhase, OfficeProvisioningState, PhaseEvidence},
+    office_state::{
+        AdoptionState, ManagedPaths, OfficeLastError, OfficePhase, OfficeProfileStatus,
+        OfficeProvisioningState, PhaseEvidence, PhaseState, PhaseStatus,
+    },
     paths,
 };
+
+pub const OFFICE_PROGRESS_STEPS: &[&str] = &[
+    "office_preflight",
+    "office_byol",
+    "office_windows_prepare",
+    "office_windows_install",
+    "office_rdp_wait",
+    "office_odt_stage",
+    "office_odt_install",
+    "office_verify_install",
+    "office_winapps_clone",
+    "office_winapps_setup",
+    "office_desktop_register",
+    "office_file_association",
+    "office_final_verify",
+    "office_cold_start",
+    "office_launch_remoteapp",
+    "office_remove_winapps",
+    "office_remove_desktop",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +68,132 @@ pub struct OfficeStartProvisioningArgs {
     pub adoption_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeNameArgs {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeRetryPhaseArgs {
+    pub name: String,
+    pub phase: OfficePhase,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedScope {
+    #[serde(default)]
+    pub manage_profile_config: bool,
+    #[serde(default)]
+    pub manage_winapps_conf: bool,
+    #[serde(default)]
+    pub manage_desktop_entries: bool,
+    #[serde(default)]
+    pub manage_file_associations: bool,
+    #[serde(default)]
+    pub manage_disk_lifecycle: bool,
+    #[serde(default)]
+    pub preserve_existing_winapps_clone: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeAdoptProfileArgs {
+    pub name: String,
+    #[serde(rename = "adoptionId", alias = "adoption_id")]
+    pub adoption_id: String,
+    #[serde(rename = "managedScope", alias = "managed_scope")]
+    pub managed_scope: ManagedScope,
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeLaunchAppArgs {
+    pub name: String,
+    #[serde(rename = "appId", alias = "app_id")]
+    pub app_id: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeRemoveProfileArgs {
+    pub name: String,
+    #[serde(rename = "deleteDisk", alias = "delete_disk")]
+    pub delete_disk: bool,
+    #[serde(default, rename = "confirmToken", alias = "confirm_token")]
+    pub confirm_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeTelemetrySetOptInArgs {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeStateResponse {
+    pub status: OfficeProfileStatus,
+    pub phases: BTreeMap<OfficePhase, PhaseState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<OfficeLastError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_sessions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adoption: Option<AdoptionState>,
+    pub managed_paths: ManagedPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeProvisioningResponse {
+    pub status: OfficeProfileStatus,
+    pub phases: BTreeMap<OfficePhase, PhaseState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<OfficeLastError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeLaunchAppResponse {
+    pub app_id: String,
+    pub delegated_to: String,
+    pub files_accepted: Vec<String>,
+    pub active_sessions: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeRemoveProfileResponse {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirm_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preserved_disk: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficeTelemetryOptInResponse {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OfficeOperationProgress {
+    pub profile: String,
+    pub op: String,
+    pub step: String,
+    pub status: String,
+    pub message: String,
+}
+
 pub fn preflight(args: OfficePreflightArgs) -> Result<OfficePreflightResult> {
     office_preflight::run_preflight(
         args.name.as_deref(),
@@ -51,6 +201,388 @@ pub fn preflight(args: OfficePreflightArgs) -> Result<OfficePreflightResult> {
         &CliDocker,
         &CliFlatpakClient,
         &CliHostPreflight,
+    )
+}
+
+pub fn preflight_contract(
+    args: OfficePreflightArgs,
+) -> std::result::Result<OfficePreflightResult, OfficeError> {
+    preflight(args).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::Preflight,
+            false,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })
+}
+
+pub fn get_state_contract(
+    args: OfficeNameArgs,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    let state = load_office_state_for_contract(&args.name)?;
+    Ok(state_response(&state))
+}
+
+pub fn start_provisioning_contract(
+    args: OfficeStartProvisioningArgs,
+) -> std::result::Result<OfficeProvisioningResponse, OfficeError> {
+    if !args.byol_accepted {
+        return Err(office_error(
+            OfficeError::BYOL_NOT_ACCEPTED,
+            OfficePhase::ByolAcceptance,
+            false,
+            serde_json::json!({ "detail": "Aceite BYOL é obrigatório antes do provisionamento." }),
+        ));
+    }
+    args.resources.validate().map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::ProfileConfig,
+            false,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    office_odt::OfficeOdtConfig::new(
+        &args.product_id,
+        &args.language,
+        crate::core::validation::OFFICE_DEFAULT_CHANNEL,
+    )
+    .map_err(|err| {
+        office_error(
+            OfficeError::OFFICE_PRODUCT_INVALID,
+            OfficePhase::ProfileConfig,
+            false,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+
+    let profile_dir = paths::profile_cfg_dir(&args.name);
+    let mut state =
+        OfficeProvisioningState::load_or_default(&profile_dir, &args.name).map_err(|err| {
+            office_error(
+                OfficeError::PROFILE_STATE_CONFLICT,
+                OfficePhase::ProfileConfig,
+                true,
+                serde_json::json!({ "detail": format!("{err:#}") }),
+            )
+        })?;
+    state.byol.accepted = true;
+    state.byol.accepted_at = Some(chrono::Utc::now().to_rfc3339());
+    state.options.product_id = args.product_id;
+    state.options.language = args.language;
+    state.options.office_channel = crate::core::validation::OFFICE_DEFAULT_CHANNEL.to_string();
+    mark_phase_done_idempotent(
+        &mut state,
+        OfficePhase::Preflight,
+        Some(PhaseEvidence {
+            registry: Some(serde_json::json!({ "contract": "office_start_provisioning" })),
+            ..PhaseEvidence::default()
+        }),
+    )?;
+    mark_phase_done_idempotent(&mut state, OfficePhase::ByolAcceptance, None)?;
+    mark_phase_done_idempotent(&mut state, OfficePhase::ProfileConfig, None)?;
+    state.save_to_dir(&profile_dir).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::ProfileConfig,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    Ok(provisioning_response(&state))
+}
+
+pub fn retry_phase_contract(
+    args: OfficeRetryPhaseArgs,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    let profile_dir = paths::profile_cfg_dir(&args.name);
+    let mut state = load_office_state_at(&profile_dir, &args.name)?;
+    state.retry_from_phase(args.phase).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            args.phase,
+            false,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    state.save_to_dir(&profile_dir).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            args.phase,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    Ok(state_response(&state))
+}
+
+pub fn adopt_profile_contract(
+    args: OfficeAdoptProfileArgs,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    if !args.confirm {
+        return Err(office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::ProfileConfig,
+            false,
+            serde_json::json!({ "detail": "Adoção exige confirmação explícita." }),
+        ));
+    }
+    let profile_dir = paths::profile_cfg_dir(&args.name);
+    let mut state =
+        OfficeProvisioningState::load_or_default(&profile_dir, &args.name).map_err(|err| {
+            office_error(
+                OfficeError::PROFILE_STATE_CONFLICT,
+                OfficePhase::ProfileConfig,
+                true,
+                serde_json::json!({ "detail": format!("{err:#}") }),
+            )
+        })?;
+    state.status = OfficeProfileStatus::Adopted;
+    state.adoption = Some(AdoptionState {
+        found: vec![serde_json::json!({
+            "adoptionId": args.adoption_id,
+            "managedScope": args.managed_scope,
+        })],
+        user_confirmed_at: Some(chrono::Utc::now().to_rfc3339()),
+    });
+    state.save_to_dir(&profile_dir).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::ProfileConfig,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    Ok(state_response(&state))
+}
+
+pub fn launch_app_contract(
+    args: OfficeLaunchAppArgs,
+) -> std::result::Result<OfficeLaunchAppResponse, OfficeError> {
+    if !matches!(args.app_id.as_str(), "excel" | "word" | "powerpoint") {
+        return Err(office_error(
+            OfficeError::APP_NOT_REGISTERED,
+            OfficePhase::FirstLaunch,
+            false,
+            serde_json::json!({ "appId": args.app_id }),
+        ));
+    }
+    let accepted = validate_launch_files(&args.files)?;
+    let state = load_office_state_for_contract(&args.name).ok();
+    Ok(OfficeLaunchAppResponse {
+        app_id: args.app_id,
+        delegated_to: "winapps".to_string(),
+        files_accepted: accepted,
+        active_sessions: state.and_then(|state| state.active_sessions),
+    })
+}
+
+pub fn remove_profile_contract(
+    args: OfficeRemoveProfileArgs,
+) -> std::result::Result<OfficeRemoveProfileResponse, OfficeError> {
+    if args
+        .confirm_token
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        return Err(office_error(
+            OfficeError::REMOVE_REQUIRES_CONFIRMATION,
+            OfficePhase::FirstLaunch,
+            false,
+            serde_json::json!({
+                "confirmToken": mint_remove_confirm_token(&args.name, args.delete_disk),
+                "deleteDisk": args.delete_disk,
+            }),
+        ));
+    }
+    let profile_dir = paths::profile_cfg_dir(&args.name);
+    let mut state =
+        OfficeProvisioningState::load_or_default(&profile_dir, &args.name).map_err(|err| {
+            office_error(
+                OfficeError::PROFILE_STATE_CONFLICT,
+                OfficePhase::FirstLaunch,
+                true,
+                serde_json::json!({ "detail": format!("{err:#}") }),
+            )
+        })?;
+    state.status = OfficeProfileStatus::Removed;
+    state.save_to_dir(&profile_dir).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::FirstLaunch,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    Ok(OfficeRemoveProfileResponse {
+        state: "removed".to_string(),
+        confirm_token: None,
+        preserved_disk: Some(!args.delete_disk),
+        removed_paths: Vec::new(),
+    })
+}
+
+pub fn telemetry_set_opt_in_contract(
+    args: OfficeTelemetrySetOptInArgs,
+) -> OfficeTelemetryOptInResponse {
+    OfficeTelemetryOptInResponse {
+        enabled: args.enabled,
+    }
+}
+
+pub fn office_progress_payload(
+    profile: &str,
+    op: &str,
+    step: &str,
+    status: &str,
+    message: impl Into<String>,
+) -> OfficeOperationProgress {
+    OfficeOperationProgress {
+        profile: profile.to_string(),
+        op: op.to_string(),
+        step: step.to_string(),
+        status: status.to_string(),
+        message: message.into(),
+    }
+}
+
+pub fn office_phase_progress_step(phase: OfficePhase) -> &'static str {
+    match phase {
+        OfficePhase::Preflight => "office_preflight",
+        OfficePhase::ByolAcceptance => "office_byol",
+        OfficePhase::ProfileConfig => "office_byol",
+        OfficePhase::WindowsPrepare => "office_windows_prepare",
+        OfficePhase::WindowsInstall => "office_windows_install",
+        OfficePhase::RemoteappPrepare => "office_rdp_wait",
+        OfficePhase::OfficeStageOdt => "office_odt_stage",
+        OfficePhase::OfficeInstall => "office_odt_install",
+        OfficePhase::WinappsConfig => "office_winapps_setup",
+        OfficePhase::DesktopRegistration => "office_desktop_register",
+        OfficePhase::FileAssociation => "office_file_association",
+        OfficePhase::FinalVerify => "office_final_verify",
+        OfficePhase::FirstLaunch => "office_launch_remoteapp",
+    }
+}
+
+fn office_error(
+    code: &str,
+    phase: OfficePhase,
+    retryable: bool,
+    details: serde_json::Value,
+) -> OfficeError {
+    OfficeError::new(code, phase, retryable, Some(details))
+}
+
+fn state_conflict(err: anyhow::Error) -> OfficeError {
+    office_error(
+        OfficeError::PROFILE_STATE_CONFLICT,
+        OfficePhase::ProfileConfig,
+        true,
+        serde_json::json!({ "detail": format!("{err:#}") }),
+    )
+}
+
+fn mark_phase_done_idempotent(
+    state: &mut OfficeProvisioningState,
+    phase: OfficePhase,
+    evidence: Option<PhaseEvidence>,
+) -> std::result::Result<(), OfficeError> {
+    if state.phase_status(phase) == Some(PhaseStatus::Done) {
+        return Ok(());
+    }
+    state.mark_phase_running(phase).map_err(state_conflict)?;
+    state
+        .mark_phase_done(phase, evidence)
+        .map_err(state_conflict)
+}
+
+fn load_office_state_for_contract(
+    profile: &str,
+) -> std::result::Result<OfficeProvisioningState, OfficeError> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    load_office_state_at(&profile_dir, profile)
+}
+
+fn load_office_state_at(
+    profile_dir: &Path,
+    profile: &str,
+) -> std::result::Result<OfficeProvisioningState, OfficeError> {
+    let state = OfficeProvisioningState::load_or_default(profile_dir, profile).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::ProfileConfig,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
+    if state.profile_kind != "office" {
+        return Err(office_error(
+            OfficeError::PROFILE_NOT_OFFICE,
+            OfficePhase::ProfileConfig,
+            false,
+            serde_json::json!({ "profileKind": state.profile_kind }),
+        ));
+    }
+    Ok(state)
+}
+
+fn state_response(state: &OfficeProvisioningState) -> OfficeStateResponse {
+    OfficeStateResponse {
+        status: state.summarize_status(),
+        phases: state.phases.clone(),
+        last_error: state.last_error.clone(),
+        active_sessions: state.active_sessions,
+        adoption: state.adoption.clone(),
+        managed_paths: state.managed_paths.clone(),
+    }
+}
+
+fn provisioning_response(state: &OfficeProvisioningState) -> OfficeProvisioningResponse {
+    OfficeProvisioningResponse {
+        status: state.summarize_status(),
+        phases: state.phases.clone(),
+        last_error: state.last_error.clone(),
+    }
+}
+
+fn validate_launch_files(files: &[String]) -> std::result::Result<Vec<String>, OfficeError> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let home_path = Path::new(&home);
+    let mut accepted = Vec::with_capacity(files.len());
+    for file in files {
+        let path = Path::new(file);
+        let has_parent_dir = path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir));
+        if home_path.as_os_str().is_empty()
+            || !path.is_absolute()
+            || has_parent_dir
+            || !path.starts_with(home_path)
+        {
+            return Err(office_error(
+                OfficeError::FILE_OUTSIDE_HOME,
+                OfficePhase::FirstLaunch,
+                false,
+                serde_json::json!({
+                    "path": file,
+                    "actionHint": "+home-drive só expõe $HOME ao guest; mova o arquivo para dentro do seu home.",
+                }),
+            ));
+        }
+        accepted.push(file.clone());
+    }
+    Ok(accepted)
+}
+
+fn mint_remove_confirm_token(profile: &str, delete_disk: bool) -> String {
+    format!(
+        "office-remove:{}:{}:{}",
+        profile,
+        delete_disk,
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     )
 }
 
@@ -183,7 +715,7 @@ fn fail_remoteapp_prepare(
     detail: String,
 ) -> Result<OfficeProvisioningState> {
     state.mark_phase_failed(OfficeLastError {
-        code: GUEST_REMOTEAPP_NOT_PREPARED_CODE.to_string(),
+        code: OfficeError::GUEST_REMOTEAPP_NOT_PREPARED.to_string(),
         message: "RemoteApp não está preparado para executar scripts no guest.".to_string(),
         phase: OfficePhase::RemoteappPrepare,
         retryable: true,
@@ -264,7 +796,7 @@ fn fail_odt_stage(
     detail: String,
 ) -> Result<OfficeProvisioningState> {
     state.mark_phase_failed(OfficeLastError {
-        code: OFFICE_ODT_STAGE_FAILED_CODE.to_string(),
+        code: OfficeError::OFFICE_ODT_STAGE_FAILED.to_string(),
         message: "Falha ao preparar Office Deployment Tool no share do perfil.".to_string(),
         phase: OfficePhase::OfficeStageOdt,
         retryable: true,
@@ -375,16 +907,16 @@ fn fail_office_install(
 
 fn office_install_error_message(code: &str) -> String {
     match code {
-        guest_executor::GUEST_PHASE_TIMEOUT_CODE => {
+        OfficeError::GUEST_PHASE_TIMEOUT => {
             "Instalação do Office não publicou marker antes do timeout.".to_string()
         }
-        guest_executor::GUEST_DISK_FULL_CODE => {
+        OfficeError::GUEST_DISK_FULL => {
             "Instalação do Office ficou sem espaço no guest.".to_string()
         }
-        guest_executor::OFFICE_ODT_FAILED_CODE => {
+        OfficeError::OFFICE_ODT_FAILED => {
             "Office Deployment Tool falhou ao instalar Microsoft 365 Apps.".to_string()
         }
-        guest_executor::OFFICE_DETECTION_FAILED_CODE => {
+        OfficeError::OFFICE_DETECTION_FAILED => {
             "Office não passou na verificação ClickToRun e executáveis.".to_string()
         }
         _ => "Executor guest falhou ao iniciar ou observar a instalação Office.".to_string(),
@@ -454,6 +986,29 @@ mod tests {
     }
 
     #[test]
+    fn operation_progress_office_error_status_shape() {
+        let payload = office_progress_payload(
+            "office",
+            "office_provision",
+            "office_odt_install",
+            "error",
+            "ODT falhou",
+        );
+        let json = serde_json::to_value(&payload).expect("payload should serialize");
+
+        assert_eq!(json["profile"], "office");
+        assert_eq!(json["op"], "office_provision");
+        assert_eq!(json["step"], "office_odt_install");
+        assert_eq!(json["status"], "error");
+        assert_eq!(json["message"], "ODT falhou");
+        assert_eq!(
+            office_phase_progress_step(OfficePhase::FinalVerify),
+            "office_final_verify"
+        );
+        assert!(OFFICE_PROGRESS_STEPS.contains(&"office_final_verify"));
+    }
+
+    #[test]
     fn adoption_noop_failure_returns_guest_remoteapp_not_prepared() {
         let root = temp_dir("noop-failure");
         let profile_dir = root.join("profile");
@@ -468,14 +1023,14 @@ mod tests {
         let state = OfficeProvisioningState::load_or_default(&profile_dir, "office")
             .expect("estado de falha deve ser persistido");
 
-        assert!(message.contains(GUEST_REMOTEAPP_NOT_PREPARED_CODE));
+        assert!(message.contains(OfficeError::GUEST_REMOTEAPP_NOT_PREPARED));
         assert!(message.contains("C:\\OEM\\install.bat"));
         assert_eq!(
             state.phase_status(OfficePhase::RemoteappPrepare),
             Some(PhaseStatus::Failed)
         );
         let last_error = state.last_error.expect("last_error should be stored");
-        assert_eq!(last_error.code, GUEST_REMOTEAPP_NOT_PREPARED_CODE);
+        assert_eq!(last_error.code, OfficeError::GUEST_REMOTEAPP_NOT_PREPARED);
         assert_eq!(last_error.phase, OfficePhase::RemoteappPrepare);
         assert!(last_error.retryable);
         assert!(oem_dir.join("install.bat").is_file());
@@ -546,13 +1101,13 @@ mod tests {
         let state = OfficeProvisioningState::load_or_default(&profile_dir, "office")
             .expect("failed state should persist");
 
-        assert!(message.contains(OFFICE_ODT_STAGE_FAILED_CODE));
+        assert!(message.contains(OfficeError::OFFICE_ODT_STAGE_FAILED));
         assert_eq!(
             state.phase_status(OfficePhase::OfficeStageOdt),
             Some(PhaseStatus::Failed)
         );
         let last_error = state.last_error.expect("last_error should be stored");
-        assert_eq!(last_error.code, OFFICE_ODT_STAGE_FAILED_CODE);
+        assert_eq!(last_error.code, OfficeError::OFFICE_ODT_STAGE_FAILED);
         assert_eq!(last_error.phase, OfficePhase::OfficeStageOdt);
         assert!(last_error.retryable);
         let _ = std::fs::remove_dir_all(root);
@@ -669,13 +1224,13 @@ mod tests {
         let state = OfficeProvisioningState::load_or_default(&profile_dir, "office")
             .expect("failed state should load");
 
-        assert!(message.contains(guest_executor::GUEST_PHASE_TIMEOUT_CODE));
+        assert!(message.contains(OfficeError::GUEST_PHASE_TIMEOUT));
         assert_eq!(
             state.phase_status(OfficePhase::OfficeInstall),
             Some(PhaseStatus::Failed)
         );
         let last_error = state.last_error.expect("last_error should be stored");
-        assert_eq!(last_error.code, guest_executor::GUEST_PHASE_TIMEOUT_CODE);
+        assert_eq!(last_error.code, OfficeError::GUEST_PHASE_TIMEOUT);
         assert_eq!(last_error.phase, OfficePhase::OfficeInstall);
         let _ = std::fs::remove_dir_all(root);
     }

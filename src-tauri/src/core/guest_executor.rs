@@ -4,17 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use super::{env_file, paths};
+use super::{env_file, launch_error::OfficeError, paths};
 
 pub const REMOTEAPP_PREPARE_MARKER: &str = "remoteapp_prepare.json";
 pub const REMOTEAPP_PREPARE_SCRIPT: &str = "winbox-remoteapp-prepare.ps1";
 pub const REMOTEAPP_NOOP_SCRIPT: &str = "winbox-remoteapp-noop.ps1";
-pub const GUEST_REMOTEAPP_NOT_PREPARED_CODE: &str = "guest_remoteapp_not_prepared";
-pub const GUEST_EXECUTOR_FAILED_CODE: &str = "guest_executor_failed";
-pub const GUEST_PHASE_TIMEOUT_CODE: &str = "guest_phase_timeout";
-pub const GUEST_DISK_FULL_CODE: &str = "guest_disk_full";
-pub const OFFICE_ODT_FAILED_CODE: &str = "office_odt_failed";
-pub const OFFICE_DETECTION_FAILED_CODE: &str = "office_detection_failed";
 pub const REMOTEAPP_ACTION_HINT: &str =
     "Abra o desktop via noVNC e execute C:\\OEM\\install.bat; se necessário, aplique as chaves RemoteApp por sessão RDP full-desktop.";
 pub const OFFICE_INSTALL_TIMEOUT_SECS: u64 = 60 * 60;
@@ -139,11 +133,11 @@ pub enum GuestPhaseError {
 impl GuestPhaseError {
     pub fn code(&self) -> &'static str {
         match self {
-            GuestPhaseError::ExecutorFailed { .. } => GUEST_EXECUTOR_FAILED_CODE,
-            GuestPhaseError::PhaseTimeout { .. } => GUEST_PHASE_TIMEOUT_CODE,
-            GuestPhaseError::DiskFull { .. } => GUEST_DISK_FULL_CODE,
-            GuestPhaseError::OfficeOdtFailed { .. } => OFFICE_ODT_FAILED_CODE,
-            GuestPhaseError::OfficeDetectionFailed { .. } => OFFICE_DETECTION_FAILED_CODE,
+            GuestPhaseError::ExecutorFailed { .. } => OfficeError::GUEST_EXECUTOR_FAILED,
+            GuestPhaseError::PhaseTimeout { .. } => OfficeError::GUEST_PHASE_TIMEOUT,
+            GuestPhaseError::DiskFull { .. } => OfficeError::GUEST_DISK_FULL,
+            GuestPhaseError::OfficeOdtFailed { .. } => OfficeError::OFFICE_ODT_FAILED,
+            GuestPhaseError::OfficeDetectionFailed { .. } => OfficeError::OFFICE_DETECTION_FAILED,
         }
     }
 
@@ -298,7 +292,7 @@ impl GuestRemoteappNotPrepared {
     }
 
     pub fn code(&self) -> &'static str {
-        GUEST_REMOTEAPP_NOT_PREPARED_CODE
+        OfficeError::GUEST_REMOTEAPP_NOT_PREPARED
     }
 
     pub fn action_hint(&self) -> &'static str {
@@ -628,15 +622,15 @@ fn error_from_failed_marker(marker: &GuestMarker) -> GuestPhaseError {
         error.message.clone()
     };
     match error.code.as_str() {
-        GUEST_DISK_FULL_CODE => GuestPhaseError::DiskFull {
+        OfficeError::GUEST_DISK_FULL => GuestPhaseError::DiskFull {
             phase: marker.phase.clone(),
             detail,
         },
-        OFFICE_ODT_FAILED_CODE => GuestPhaseError::OfficeOdtFailed {
+        OfficeError::OFFICE_ODT_FAILED => GuestPhaseError::OfficeOdtFailed {
             phase: marker.phase.clone(),
             detail,
         },
-        OFFICE_DETECTION_FAILED_CODE => GuestPhaseError::OfficeDetectionFailed {
+        OfficeError::OFFICE_DETECTION_FAILED => GuestPhaseError::OfficeDetectionFailed {
             phase: marker.phase.clone(),
             detail,
         },
@@ -962,7 +956,7 @@ mod tests {
             .expect_err("RemoteApp failure should be actionable");
         let message = format!("{err:#}");
 
-        assert!(message.contains(GUEST_REMOTEAPP_NOT_PREPARED_CODE));
+        assert!(message.contains(OfficeError::GUEST_REMOTEAPP_NOT_PREPARED));
         assert!(message.contains("C:\\OEM\\install.bat"));
     }
 
@@ -1019,7 +1013,7 @@ mod tests {
         )
         .expect_err("missing marker should timeout");
 
-        assert_eq!(err.code(), GUEST_PHASE_TIMEOUT_CODE);
+        assert_eq!(err.code(), OfficeError::GUEST_PHASE_TIMEOUT);
         assert_eq!(err.phase(), "office_install");
     }
 
@@ -1044,13 +1038,13 @@ mod tests {
             .product_release_ids = None;
         let err = verify_office_install_marker(&missing_registry)
             .expect_err("missing registry should fail readiness");
-        assert_eq!(err.code(), OFFICE_DETECTION_FAILED_CODE);
+        assert_eq!(err.code(), OfficeError::OFFICE_DETECTION_FAILED);
 
         let mut wrong_platform = marker.clone();
         wrong_platform.office.as_mut().unwrap().platform = Some("x86".to_string());
         let err = verify_office_install_marker(&wrong_platform)
             .expect_err("wrong platform should fail readiness");
-        assert_eq!(err.code(), OFFICE_DETECTION_FAILED_CODE);
+        assert_eq!(err.code(), OfficeError::OFFICE_DETECTION_FAILED);
 
         let mut missing_exe = marker;
         missing_exe
@@ -1063,18 +1057,18 @@ mod tests {
             .excel = None;
         let err = verify_office_install_marker(&missing_exe)
             .expect_err("missing Excel executable should fail readiness");
-        assert_eq!(err.code(), OFFICE_DETECTION_FAILED_CODE);
+        assert_eq!(err.code(), OfficeError::OFFICE_DETECTION_FAILED);
     }
 
     #[test]
     fn office_install_failed_marker_maps_specific_codes() {
-        let disk = failed_office_marker(GUEST_DISK_FULL_CODE, "sem espaço no disco");
+        let disk = failed_office_marker(OfficeError::GUEST_DISK_FULL, "sem espaço no disco");
         let err = verify_office_install_marker(&disk).expect_err("disk marker should fail");
-        assert_eq!(err.code(), GUEST_DISK_FULL_CODE);
+        assert_eq!(err.code(), OfficeError::GUEST_DISK_FULL);
 
-        let odt = failed_office_marker(OFFICE_ODT_FAILED_CODE, "ODT retornou 1");
+        let odt = failed_office_marker(OfficeError::OFFICE_ODT_FAILED, "ODT retornou 1");
         let err = verify_office_install_marker(&odt).expect_err("odt marker should fail");
-        assert_eq!(err.code(), OFFICE_ODT_FAILED_CODE);
+        assert_eq!(err.code(), OfficeError::OFFICE_ODT_FAILED);
     }
 
     fn assert_no_lf_without_cr(s: &str) {

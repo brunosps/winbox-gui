@@ -8,7 +8,9 @@ use std::time::Duration;
 use super::{
     docker::DockerClient,
     flatpak::{self, FlatpakClient, FlatpakInstallConsent},
-    host, paths,
+    host,
+    launch_error::OfficeError,
+    paths,
 };
 
 pub const MIN_RAM_GB: u32 = 4;
@@ -65,19 +67,6 @@ pub struct OfficePreflightResult {
     pub warnings: usize,
     pub blockers: usize,
     pub adoption_candidates: Vec<serde_json::Value>,
-}
-
-// Task 10 expands this enum with the full Office taxonomy. Task 4 only needs
-// the preflight subset so callers can rely on stable codes from day one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "code", rename_all = "snake_case")]
-pub enum OfficeError {
-    PreflightKvmMissing,
-    PreflightDockerMissing,
-    PreflightSubnetConflict,
-    FlatpakFreerdpMissing,
-    FlatpakHomeOverrideMissing,
-    NativeFreerdpTooOld,
 }
 
 impl PreflightCheck {
@@ -297,13 +286,13 @@ fn classify_kvm(status: KvmStatus) -> PreflightCheck {
             "A VM Windows pode usar aceleração de hardware.",
         ),
         KvmStatus::Missing => PreflightCheck::blocker(
-            "preflight_kvm_missing",
+            OfficeError::PREFLIGHT_KVM_MISSING,
             "/dev/kvm deve existir.",
             "Sem KVM, o Windows fica impraticável ou falha ao iniciar.",
             "Habilite virtualização na BIOS/UEFI e carregue o módulo KVM.",
         ),
         KvmStatus::PermissionDenied(detail) => PreflightCheck::new(
-            "preflight_kvm_missing",
+            OfficeError::PREFLIGHT_KVM_MISSING,
             PreflightStatus::Blocker,
             "/dev/kvm deve estar acessível ao usuário.",
             "Sem acesso ao KVM, o winbox não consegue iniciar a VM acelerada.",
@@ -316,7 +305,7 @@ fn classify_kvm(status: KvmStatus) -> PreflightCheck {
 fn classify_docker(docker: &dyn DockerClient) -> PreflightCheck {
     if !docker.docker_binary_available() {
         return PreflightCheck::blocker(
-            "preflight_docker_missing",
+            OfficeError::PREFLIGHT_DOCKER_MISSING,
             "Docker deve estar instalado no PATH.",
             "O perfil Office depende de Docker para criar e operar a VM Windows.",
             "Instale Docker Engine e reabra o winbox.",
@@ -324,7 +313,7 @@ fn classify_docker(docker: &dyn DockerClient) -> PreflightCheck {
     }
     if !docker.docker_daemon_available() {
         return PreflightCheck::blocker(
-            "preflight_docker_missing",
+            OfficeError::PREFLIGHT_DOCKER_MISSING,
             "Docker daemon deve estar acessível.",
             "Sem daemon Docker, o winbox não consegue criar ou iniciar containers.",
             "Inicie o serviço Docker e confirme que seu usuário acessa /var/run/docker.sock.",
@@ -332,7 +321,7 @@ fn classify_docker(docker: &dyn DockerClient) -> PreflightCheck {
     }
     if !docker.docker_compose_available() {
         return PreflightCheck::blocker(
-            "preflight_docker_missing",
+            OfficeError::PREFLIGHT_DOCKER_MISSING,
             "Docker Compose deve estar disponível.",
             "Sem Compose, o winbox não consegue aplicar o compose.yml do perfil.",
             "Instale o plugin Docker Compose v2 ou o binário docker-compose.",
@@ -505,7 +494,7 @@ fn classify_subnet(
     if let Some((docker_cidr, route_cidr)) = detect_subnet_conflict(&docker_cidrs, &route_cidrs) {
         let action_hint = "Configure default-address-pools em /etc/docker/daemon.json com uma faixa que não sobreponha a rede local e recrie a rede do perfil.";
         return PreflightCheck::new(
-            "preflight_subnet_conflict",
+            OfficeError::PREFLIGHT_SUBNET_CONFLICT,
             PreflightStatus::Blocker,
             "Subnet Docker do perfil não deve sobrepor rotas locais.",
             "Conflito de rede pode impedir RDP, downloads do ODT ou acesso do guest à internet.",

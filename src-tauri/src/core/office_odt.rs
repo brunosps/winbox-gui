@@ -5,6 +5,7 @@ use std::process::Command;
 use super::{
     env_file,
     guest_executor::{self, GuestScript},
+    launch_error::OfficeError,
     validation,
 };
 
@@ -15,7 +16,6 @@ pub const OFFICE_INSTALL_SCRIPT: &str = "winbox-office-install.ps1";
 pub const OFFICE_SETUP_VERIFY_SCRIPT: &str = "winbox-office-verify-setup.ps1";
 pub const OFFICE_INSTALL_MARKER: &str = "office_install.json";
 pub const OFFICE_STAGE_MARKER: &str = "office_stage_odt.json";
-pub const OFFICE_ODT_STAGE_FAILED_CODE: &str = "office_odt_stage_failed";
 pub const OFFICE_ODT_MODE_CONFIGURE_CDN: &str = "configure_cdn";
 
 pub const EXCLUDED_APPS: &[&str] = &[
@@ -100,7 +100,7 @@ impl OfficeOdtStageFailed {
     }
 
     pub fn code(&self) -> &'static str {
-        OFFICE_ODT_STAGE_FAILED_CODE
+        OfficeError::OFFICE_ODT_STAGE_FAILED
     }
 }
 
@@ -215,9 +215,9 @@ pub fn render_office_install_script() -> String {
         "  $text = \"$exitCode $message\"".to_string(),
         format!(
             "  if ($text -match '0x80070070|not enough space|not enough disk|disk full|insufficient disk|espaço insuficiente') {{ return '{}' }}",
-            guest_executor::GUEST_DISK_FULL_CODE
+            OfficeError::GUEST_DISK_FULL
         ),
-        format!("  return '{}'", guest_executor::OFFICE_ODT_FAILED_CODE),
+        format!("  return '{}'", OfficeError::OFFICE_ODT_FAILED),
         "}".to_string(),
         "function Get-WinboxOfficeEvidence {".to_string(),
         "  $reg = Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Office\\ClickToRun\\Configuration' -ErrorAction SilentlyContinue".to_string(),
@@ -262,7 +262,7 @@ pub fn render_office_install_script() -> String {
         "  } catch {".to_string(),
         format!(
             "    Write-WinboxMarker 'failed' 0 '{}' $_.Exception.Message $office",
-            guest_executor::OFFICE_DETECTION_FAILED_CODE
+            OfficeError::OFFICE_DETECTION_FAILED
         ),
         "    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null".to_string(),
         "    exit 1".to_string(),
@@ -650,7 +650,7 @@ mod tests {
             &host,
         )
         .expect_err("mismatched hash should fail");
-        assert!(format!("{bad:#}").contains(OFFICE_ODT_STAGE_FAILED_CODE));
+        assert!(format!("{bad:#}").contains(OfficeError::OFFICE_ODT_STAGE_FAILED));
         let _ = std::fs::remove_dir_all(root);
     }
 

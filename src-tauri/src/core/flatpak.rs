@@ -1,7 +1,10 @@
 use serde::Serialize;
 use std::process::Command;
 
-use super::office_preflight::{PreflightCheck, PreflightStatus};
+use super::{
+    launch_error::OfficeError,
+    office_preflight::{PreflightCheck, PreflightStatus},
+};
 
 pub const FREERDP_FLATPAK_ID: &str = "com.freerdp.FreeRDP";
 pub const FREERDP_FLATPAK_COMMAND: &str = "flatpak run --command=xfreerdp com.freerdp.FreeRDP";
@@ -128,7 +131,7 @@ pub fn detect_freerdp(
         };
         return FreerdpPreflight {
             check: PreflightCheck::new(
-                "flatpak_freerdp_missing",
+                OfficeError::FLATPAK_FREERDP_MISSING,
                 status,
                 "FreeRDP 3.x via Flatpak deve estar disponível quando o nativo é inadequado.",
                 "Sem FreeRDP compatível, WinApps/RemoteApp não conseguem abrir Office.",
@@ -157,7 +160,7 @@ pub fn detect_freerdp(
     if !flatpak_has_home_override(&permissions) {
         return FreerdpPreflight {
             check: PreflightCheck::new(
-                "flatpak_home_override_missing",
+                OfficeError::FLATPAK_HOME_OVERRIDE_MISSING,
                 PreflightStatus::Blocker,
                 "Flatpak FreeRDP deve ter override --filesystem=home.",
                 "+home-drive precisa expor o HOME como \\\\tsclient\\home para abrir arquivos Linux no Office.",
