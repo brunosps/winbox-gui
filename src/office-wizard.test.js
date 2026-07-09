@@ -7,13 +7,16 @@ import {
   canStartProvisioning,
   canContinueFromPreflight,
   initialOfficeWizardState,
+  isOfficeReadyForLaunch,
   officeWizardCta,
   officeWizardReducer,
+  renderActivationGuidance,
   renderAdoptionReview,
   renderByolStep,
   renderOfficeWizard,
   renderPreflightStep,
   renderProvisioningStep,
+  renderReadyStep,
   stateFromProvisioningResponse,
 } from "./office-wizard.js";
 import {
@@ -58,6 +61,21 @@ const dict = {
   "officeWizard.provisioning.duration": "This can take up to around 45 minutes and needs no interaction.",
   "officeWizard.provisioning.largeDownload": "Large downloads can take longer on slow networks.",
   "officeWizard.provisioning.failed": "Provisioning failed.",
+  "officeWizard.ready.title": "Office is installed",
+  "officeWizard.ready.desc": "Profile {profile} is ready. First launch opens through RemoteApp.",
+  "officeWizard.ready.firstLaunch.pending": "First launch has not run yet. This does not block ready.",
+  "officeWizard.ready.firstLaunch.running": "First launch is running.",
+  "officeWizard.ready.firstLaunch.done": "First launch completed.",
+  "officeWizard.ready.firstLaunch.failed": "First launch failed.",
+  "officeWizard.ready.firstLaunch.skipped": "First launch skipped.",
+  "officeWizard.activation.title": "Sign in and activation",
+  "officeWizard.activation.remoteApp": "Apps open through RemoteApp from {profile} and may ask for Microsoft 365 sign-in.",
+  "officeWizard.activation.userResponsibility": "Activation is the user's responsibility. winbox installs Office, not activated.",
+  "officeWizard.activation.noAutomation": "winbox does not automate, bypass or validate Office activation.",
+  "officeWizard.launch.actionsLabel": "Open an Office app",
+  "officeWizard.launch.excel": "Open Excel",
+  "officeWizard.launch.word": "Open Word",
+  "officeWizard.launch.powerpoint": "Open PowerPoint",
   "officeWizard.preflight.loading": "Checking host.",
   "officeWizard.preflight.blocked": "Resolve blockers before provisioning.",
   "officeWizard.preflight.checksLabel": "Pre-flight checks",
@@ -441,6 +459,60 @@ test("office_progress_window_renders_same_operation_events", () => {
   assert.match(html, /aria-live="polite"/);
 });
 
+test("first_launch_is_informational_not_ready_gate", () => {
+  const state = initialOfficeWizardState({
+    step: "provisioning",
+    status: "success",
+    phaseStatuses: {
+      final_verify: "done",
+      first_launch: "pending",
+    },
+  });
+  const html = renderReadyStep(state, deps);
+
+  assert.equal(isOfficeReadyForLaunch(state), true);
+  assert.match(html, /Office is installed/);
+  assert.match(html, /This does not block ready/);
+  assert.match(html, /data-office-wizard-action="launch-app"/);
+});
+
+test("activation_guidance_is_static_and_localized", () => {
+  const state = initialOfficeWizardState({
+    profileName: `office"><script>alert(1)</script>`,
+  });
+  const html = renderActivationGuidance(state, deps);
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+
+  assert.match(html, /Microsoft 365 sign-in/);
+  assert.match(html, /Activation is the user&#39;s responsibility/);
+  assert.match(html, /does not automate, bypass or validate Office activation/);
+  assert.match(html, /office&quot;&gt;&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /heuristic|detect|validate activation/i);
+  assert.equal(en.includes("officeWizard.activation.noAutomation"), true);
+  assert.equal(pt.includes("officeWizard.activation.noAutomation"), true);
+});
+
+test("post_launch_actions_call_office_launcher", () => {
+  const root = fakeRoot();
+  const launches = [];
+  bindOfficeWizard(root, {
+    getState: () => initialOfficeWizardState({ profileName: "office" }),
+    onLaunchApp: args => launches.push(args),
+  });
+
+  root.fire("click", fakeEvent(actionTarget("launch-app", { officeApp: "excel" })));
+
+  assert.deepEqual(launches, [
+    {
+      name: "office",
+      appId: "excel",
+      files: [],
+      guiProgress: true,
+    },
+  ]);
+});
+
 test("office_wizard_initial_state_is_keyboard_reachable", () => {
   const html = renderOfficeWizard(initialOfficeWizardState(), deps);
 
@@ -528,6 +600,11 @@ test("provisioning_and_progress_window_i18n_parallel", () => {
     "officeWizard.step.provisioning",
     "officeWizard.provisioning.duration",
     "officeWizard.provisioning.largeDownload",
+    "officeWizard.ready.title",
+    "officeWizard.ready.firstLaunch.pending",
+    "officeWizard.activation.remoteApp",
+    "officeWizard.activation.noAutomation",
+    "officeWizard.launch.excel",
     "officeWizard.phase.office_install",
     "officeWizard.phase.final_verify",
     "officeProgress.title",
@@ -569,10 +646,10 @@ function fakeEvent(target) {
   return { target };
 }
 
-function actionTarget(action) {
+function actionTarget(action, dataset = {}) {
   return {
     disabled: false,
-    dataset: { officeWizardAction: action },
+    dataset: { officeWizardAction: action, ...dataset },
     closest(selector) {
       return selector === "[data-office-wizard-action]" ? this : null;
     },

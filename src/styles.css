@@ -1261,6 +1261,7 @@ textarea.field-input {
 }
 
 .office-wizard-provisioning-intro,
+.office-wizard-activation,
 .office-progress-window-status,
 .office-progress-window-hint {
   padding: 12px;
@@ -1280,6 +1281,23 @@ textarea.field-input {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.office-wizard-activation {
+  display: grid;
+  gap: 6px;
+}
+
+.office-wizard-activation p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.office-wizard-launch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .office-wizard-action-hint {
@@ -2136,7 +2154,8 @@ pre {
   .office-wizard-grid,
   .office-wizard-fields,
   .office-wizard-summary,
-  .office-wizard-scope-grid {
+  .office-wizard-scope-grid,
+  .office-wizard-launch-grid {
     grid-template-columns: 1fr;
   }
 

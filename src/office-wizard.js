@@ -21,6 +21,12 @@ export const OFFICE_WIZARD_STEPS = ["intro", "profile", "license", "preflight", 
 
 export const OFFICE_WIZARD_PHASES = Object.keys(DEFAULT_PHASE_STATUSES);
 
+export const OFFICE_LAUNCH_APPS = [
+  ["excel", "officeWizard.launch.excel"],
+  ["word", "officeWizard.launch.word"],
+  ["powerpoint", "officeWizard.launch.powerpoint"],
+];
+
 const PROGRESS_STEP_PHASE = {
   office_preflight: "preflight",
   office_byol: "byol_acceptance",
@@ -173,6 +179,11 @@ export function canContinueFromPreflight(state) {
   }
   if (adoptionCandidates(current).length > 0 && !current.adoptionConfirmed) return false;
   return true;
+}
+
+export function isOfficeReadyForLaunch(state) {
+  const current = initialOfficeWizardState(state);
+  return current.phaseStatuses.final_verify === "done" || current.status === "success";
 }
 
 export function officeWizardPhaseLabel(phase, { t }) {
@@ -344,6 +355,7 @@ export function bindOfficeWizard(root, deps = {}) {
   const dispatch = deps.dispatch || (() => {});
   const onClose = deps.onClose || (() => {});
   const onStart = deps.onStart || (() => {});
+  const onLaunchApp = deps.onLaunchApp || (() => {});
   const getState = deps.getState || (() => deps.state || stateFromControls(root));
 
   const onInput = (event) => {
@@ -373,6 +385,15 @@ export function bindOfficeWizard(root, deps = {}) {
     }
     if (action === "set-step") {
       return dispatch({ type: "set_step", step: control.dataset.officeWizardStep });
+    }
+    if (action === "launch-app") {
+      const state = getState();
+      return onLaunchApp({
+        name: String(state.profileName || "office"),
+        appId: String(control.dataset.officeApp || ""),
+        files: [],
+        guiProgress: true,
+      });
     }
     if (action === "next" || action === "back") return dispatch({ type: action });
     return undefined;
@@ -463,6 +484,7 @@ function renderCurrentStep(state, deps) {
 export function renderProvisioningStep(state, deps) {
   const { t, escapeHtml } = deps;
   const current = initialOfficeWizardState(state);
+  if (isOfficeReadyForLaunch(current)) return renderReadyStep(current, deps);
   const progressMessage = current.lastProgress?.message || "";
   const failure = current.lastError
     ? `<div class="office-wizard-callout" data-tone="danger" role="alert">${escapeHtml(current.lastError.message || current.lastError.code || t("officeWizard.provisioning.failed"))}</div>`
@@ -476,6 +498,40 @@ export function renderProvisioningStep(state, deps) {
     ${progressMessage ? `<div class="office-wizard-callout" data-tone="info" aria-live="polite">${escapeHtml(progressMessage)}</div>` : ""}
     ${failure}
     ${renderProvisioningTimeline(current, deps)}`;
+}
+
+export function renderReadyStep(state, deps) {
+  const { t, escapeHtml, escapeAttr } = deps;
+  const current = initialOfficeWizardState(state);
+  const firstLaunchStatus = current.phaseStatuses.first_launch || "pending";
+  return `
+    <div class="office-wizard-copy">
+      <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.ready.title"))}</h3>
+      <p>${escapeHtml(t("officeWizard.ready.desc", { profile: current.profileName }))}</p>
+    </div>
+    ${renderActivationGuidance(current, deps)}
+    <div class="office-wizard-launch-grid" aria-label="${escapeAttr(t("officeWizard.launch.actionsLabel"))}">
+      ${OFFICE_LAUNCH_APPS.map(([appId, labelKey]) => `
+        <button type="button" class="btn btn-primary" data-office-wizard-action="launch-app"
+                data-office-app="${escapeAttr(appId)}">
+          ${escapeHtml(t(labelKey))}
+        </button>`).join("")}
+    </div>
+    <div class="office-wizard-callout" data-tone="info">
+      ${escapeHtml(t(`officeWizard.ready.firstLaunch.${firstLaunchStatus}`))}
+    </div>
+    ${renderProvisioningTimeline(current, deps)}`;
+}
+
+export function renderActivationGuidance(state, { t, escapeHtml, escapeAttr }) {
+  const current = initialOfficeWizardState(state);
+  return `
+    <section class="office-wizard-activation" aria-label="${escapeAttr(t("officeWizard.activation.title"))}">
+      <strong>${escapeHtml(t("officeWizard.activation.title"))}</strong>
+      <p>${escapeHtml(t("officeWizard.activation.remoteApp", { profile: current.profileName }))}</p>
+      <p>${escapeHtml(t("officeWizard.activation.userResponsibility"))}</p>
+      <p>${escapeHtml(t("officeWizard.activation.noAutomation"))}</p>
+    </section>`;
 }
 
 export function renderProvisioningIntro({ t, escapeHtml }) {
