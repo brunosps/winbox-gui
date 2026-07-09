@@ -165,6 +165,8 @@ registerLocale("pt-BR", {
   "officeWizard.licenseInfo.positive": "A Microsoft documenta Microsoft 365 Apps for Enterprise e Business Premium como planos suportados para virtual desktop.",
   "officeWizard.licenseInfo.thirdPartyBoundary": "WinApps permanece upstream em runtime; o winbox não embute nem vendoriza artefatos WinApps.",
   "officeWizard.licenseInfo.adrLink": "ADR da fronteira em runtime",
+  "officeWizard.telemetry.title": "Compartilhar telemetria mínima de provisionamento",
+  "officeWizard.telemetry.desc": "Opcional e desligada por padrão. Envia apenas fase, duração, release e família geral do host; sem credenciais, chaves, nomes de arquivo, conteúdo de documentos, paths absolutos ou identificadores de máquina.",
   "officeWizard.preflight.title": "Rodar pré-flight do host",
   "officeWizard.preflight.desc": "O próximo passo verifica KVM, Docker, FreeRDP, recursos, conflitos de subnet e candidatos de adoção antes do provisionamento.",
   "officeWizard.preflight.duration": "Um provisionamento limpo pode levar cerca de 45 minutos e baixar vários gigabytes.",

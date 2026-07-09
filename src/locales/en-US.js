@@ -173,6 +173,8 @@ registerLocale("en-US", {
   "officeWizard.licenseInfo.positive": "Microsoft documents Microsoft 365 Apps for Enterprise and Business Premium as supported virtual desktop plans.",
   "officeWizard.licenseInfo.thirdPartyBoundary": "WinApps stays upstream at runtime; winbox does not bundle or vendor WinApps artifacts.",
   "officeWizard.licenseInfo.adrLink": "Runtime boundary ADR",
+  "officeWizard.telemetry.title": "Share minimal provisioning telemetry",
+  "officeWizard.telemetry.desc": "Optional and off by default. Sends phase, duration, release and coarse host family only; no credentials, keys, file names, document content, absolute paths or machine identifiers.",
   "officeWizard.preflight.title": "Run host pre-flight",
   "officeWizard.preflight.desc": "The next step checks KVM, Docker, FreeRDP, resources, subnet conflicts and adoption candidates before provisioning starts.",
   "officeWizard.preflight.duration": "Clean provisioning can take around 45 minutes and downloads several gigabytes.",

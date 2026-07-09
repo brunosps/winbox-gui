@@ -25,6 +25,7 @@ pub mod paths;
 pub mod ports;
 pub mod profile;
 pub mod snapshots;
+pub mod telemetry;
 pub mod validation;
 pub mod vfio_setup;
 pub mod winapps;

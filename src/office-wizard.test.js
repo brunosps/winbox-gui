@@ -18,6 +18,7 @@ import {
   renderPreflightStep,
   renderProvisioningStep,
   renderReadyStep,
+  renderTelemetryPreference,
   stateFromProvisioningResponse,
 } from "./office-wizard.js";
 import {
@@ -62,6 +63,8 @@ const dict = {
   "officeWizard.licenseInfo.positive": "Enterprise and Business Premium are supported virtual desktop plans.",
   "officeWizard.licenseInfo.thirdPartyBoundary": "WinApps stays upstream at runtime and is not vendored.",
   "officeWizard.licenseInfo.adrLink": "Runtime boundary ADR",
+  "officeWizard.telemetry.title": "Share minimal provisioning telemetry",
+  "officeWizard.telemetry.desc": "Optional and off by default. Sends phase and duration only.",
   "officeWizard.preflight.title": "Pre-flight",
   "officeWizard.preflight.desc": "Check host requirements before provisioning.",
   "officeWizard.preflight.duration": "Provisioning can take around 45 minutes.",
@@ -316,6 +319,20 @@ test("license_guidance_escapes_dynamic_links", () => {
   assert.match(html, /href="#"/);
   assert.doesNotMatch(html, /javascript:alert/);
   assert.doesNotMatch(html, /onclick=/);
+});
+
+test("telemetry_preference_defaults_off_and_is_localized", () => {
+  const state = initialOfficeWizardState();
+  const html = renderTelemetryPreference(state, deps);
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+
+  assert.equal(state.telemetryOptIn, false);
+  assert.match(html, /data-office-wizard-field="telemetryOptIn"/);
+  assert.doesNotMatch(html, /checked/);
+  assert.match(html, /Optional and off by default/);
+  assert.equal(en.includes("officeWizard.telemetry.title"), true);
+  assert.equal(pt.includes("officeWizard.telemetry.title"), true);
 });
 
 test("preflight_blocker_renders_action_hint_escaped", () => {
@@ -626,6 +643,8 @@ test("byol_disclaimer_i18n_parallel", () => {
     "officeWizard.licenseInfo.m365Business",
     "officeWizard.licenseInfo.positive",
     "officeWizard.licenseInfo.thirdPartyBoundary",
+    "officeWizard.telemetry.title",
+    "officeWizard.telemetry.desc",
   ];
 
   for (const key of required) {

@@ -24,7 +24,7 @@ use crate::core::{
         AdoptionState, ManagedPaths, OfficeLastError, OfficePhase, OfficeProfileStatus,
         OfficeProvisioningState, PhaseEvidence, PhaseState, PhaseStatus,
     },
-    paths,
+    paths, telemetry,
     winapps::{self, CliRdpSessionProbe, CliWinAppsClient, RdpSessionProbe, WinAppsClient},
 };
 
@@ -320,6 +320,10 @@ pub fn start_provisioning_contract(
         )
     })?;
 
+    if let Some(enabled) = args.telemetry_opt_in {
+        let _ = telemetry::set_opt_in(enabled);
+    }
+
     let profile_dir = paths::profile_cfg_dir(&args.name);
     let mut state =
         OfficeProvisioningState::load_or_default(&profile_dir, &args.name).map_err(|err| {
@@ -353,6 +357,18 @@ pub fn start_provisioning_contract(
             serde_json::json!({ "detail": format!("{err:#}") }),
         )
     })?;
+    let _ = telemetry::send_if_enabled_at(
+        &telemetry::telemetry_preferences_path(),
+        telemetry::TelemetryEventInput {
+            event: "wizard_started".to_string(),
+            phase: "office_byol".to_string(),
+            duration_ms: None,
+            error_code: None,
+            language: state.options.language.clone(),
+            product_id: state.options.product_id.clone(),
+        },
+        &telemetry::CurlTelemetrySink::default(),
+    );
     Ok(provisioning_response(&state))
 }
 
@@ -681,9 +697,10 @@ fn remove_profile_at(
 pub fn telemetry_set_opt_in_contract(
     args: OfficeTelemetrySetOptInArgs,
 ) -> OfficeTelemetryOptInResponse {
-    OfficeTelemetryOptInResponse {
-        enabled: args.enabled,
-    }
+    let enabled = telemetry::set_opt_in(args.enabled)
+        .map(|prefs| prefs.enabled)
+        .unwrap_or(false);
+    OfficeTelemetryOptInResponse { enabled }
 }
 
 pub fn office_progress_payload(

@@ -81,6 +81,7 @@ export function initialOfficeWizardState(overrides = {}) {
     productId: "O365ProPlusRetail",
     language: "pt-br",
     byolAccepted: false,
+    telemetryOptIn: false,
     warningOverride: false,
     adoptionConfirmed: false,
     preflightChecks: [],
@@ -428,10 +429,12 @@ export function bindOfficeWizard(root, deps = {}) {
 
 function stateFromControls(root) {
   const byol = root.querySelector?.('[data-office-wizard-field="byolAccepted"]');
+  const telemetry = root.querySelector?.('[data-office-wizard-field="telemetryOptIn"]');
   const warning = root.querySelector?.('[data-office-wizard-field="warningOverride"]');
   const adoption = root.querySelector?.('[data-office-wizard-field="adoptionConfirmed"]');
   return initialOfficeWizardState({
     byolAccepted: Boolean(byol?.checked),
+    telemetryOptIn: Boolean(telemetry?.checked),
     warningOverride: Boolean(warning?.checked),
     adoptionConfirmed: Boolean(adoption?.checked),
   });
@@ -640,12 +643,26 @@ export function renderByolStep(state, deps) {
       ${BYOL_DISCLAIMER_KEYS.map(key => `<li>${escapeHtml(t(key))}</li>`).join("")}
     </ul>
     ${renderLicenseScopeStep(state, deps)}
+    ${renderTelemetryPreference(state, deps)}
     ${error}
     ${loading}
     <label class="office-wizard-check">
       <input type="checkbox" data-office-wizard-field="byolAccepted"
              aria-describedby="office-wizard-byol-desc" ${state.byolAccepted ? "checked" : ""} />
       <span>${escapeHtml(t("officeWizard.license.accept"))}</span>
+    </label>`;
+}
+
+export function renderTelemetryPreference(state, { t, escapeHtml }) {
+  const current = initialOfficeWizardState(state);
+  return `
+    <label class="office-wizard-check">
+      <input type="checkbox" data-office-wizard-field="telemetryOptIn"
+             ${current.telemetryOptIn ? "checked" : ""} />
+      <span>
+        <strong>${escapeHtml(t("officeWizard.telemetry.title"))}</strong>
+        <small>${escapeHtml(t("officeWizard.telemetry.desc"))}</small>
+      </span>
     </label>`;
 }
 
