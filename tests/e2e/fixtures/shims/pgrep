@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'pgrep %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+if [ "${WINBOX_E2E_RDP_SESSION:-inactive}" = "error" ]; then
+  echo "mock pgrep forced failure" >&2
+  exit 2
+fi
+
+if [ "${WINBOX_E2E_RDP_SESSION:-inactive}" = "active" ]; then
+  echo "4242 flatpak run com.freerdp.FreeRDP /v:127.0.0.1:${WINBOX_E2E_RDP_PORT:-13389} /app:excel"
+  exit 0
+fi
+
+exit 1

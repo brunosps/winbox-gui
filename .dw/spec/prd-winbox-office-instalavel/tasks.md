@@ -52,7 +52,7 @@ feat/prd-winbox-office-instalavel
 | 25.0 | Implementar endpoint mínimo de telemetria beta | FR-8.3, FR-8.4 | 24.0 | Concluída |
 | 26.0 | Ajustar empacotamento, atribuições e CI de release | FR-1.1, FR-3.7 | 13.0, 16.0, 23.0 | Concluída |
 | 27.0 | Corrigir harness E2E e cobrir fluxo do wizard | FR-4.6 | 20.0, 21.0, 22.0, 26.0 | Concluída |
-| 28.0 | Cobrir E2E de launch, lifecycle e upgrade Office | FR-1.4, FR-7.7 | 16.0, 17.0, 26.0, 27.0 | Pendente |
+| 28.0 | Cobrir E2E de launch, lifecycle e upgrade Office | FR-1.4, FR-7.7 | 16.0, 17.0, 26.0, 27.0 | Concluída |
 | 29.0 | Fechar gates de cobertura e regressão de contrato | FR-1.4, FR-8.4 | 10.0, 18.0, 26.0, 27.0, 28.0 | Pendente |
 
 ## Progresso
@@ -84,7 +84,7 @@ feat/prd-winbox-office-instalavel
 - [x] 25.0 Implementar endpoint mínimo de telemetria beta
 - [x] 26.0 Ajustar empacotamento, atribuições e CI de release
 - [x] 27.0 Corrigir harness E2E e cobrir fluxo do wizard
-- [ ] 28.0 Cobrir E2E de launch, lifecycle e upgrade Office
+- [x] 28.0 Cobrir E2E de launch, lifecycle e upgrade Office
 - [ ] 29.0 Fechar gates de cobertura e regressão de contrato
 
 ## Mapa FR -> Task(s)
