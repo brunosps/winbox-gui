@@ -22,6 +22,7 @@ use crate::core::{
         OfficeProvisioningState, PhaseEvidence, PhaseState, PhaseStatus,
     },
     paths,
+    winapps::{self, CliWinAppsClient, WinAppsClient},
 };
 
 pub const OFFICE_PROGRESS_STEPS: &[&str] = &[
@@ -598,6 +599,10 @@ pub fn install_office(profile: &str) -> Result<OfficeProvisioningState> {
     install_office_with_executor(profile, &CliGuestExecutor)
 }
 
+pub fn configure_winapps(profile: &str) -> Result<OfficeProvisioningState> {
+    configure_winapps_with_client(profile, &CliWinAppsClient)
+}
+
 pub fn stage_odt_with_host(profile: &str, host: &dyn OdtHost) -> Result<OfficeProvisioningState> {
     let profile_dir = paths::profile_cfg_dir(profile);
     let env_path = paths::profile_env_file(profile);
@@ -628,6 +633,15 @@ pub fn install_office_with_executor(
         executor,
         GuestPhaseTimeout::office_install(),
     )
+}
+
+pub fn configure_winapps_with_client(
+    profile: &str,
+    client: &dyn WinAppsClient,
+) -> Result<OfficeProvisioningState> {
+    let profile_dir = paths::profile_cfg_dir(profile);
+    let env_path = paths::profile_env_file(profile);
+    configure_winapps_at(profile, &profile_dir, &env_path, client)
 }
 
 pub fn prepare_remoteapp_with_executor(
@@ -921,6 +935,95 @@ fn office_install_error_message(code: &str) -> String {
         }
         _ => "Executor guest falhou ao iniciar ou observar a instalação Office.".to_string(),
     }
+}
+
+fn configure_winapps_at(
+    profile: &str,
+    profile_dir: &Path,
+    env_path: &Path,
+    client: &dyn WinAppsClient,
+) -> Result<OfficeProvisioningState> {
+    let mut state = OfficeProvisioningState::load_or_default(profile_dir, profile)?;
+    state.ensure_remoteapp_ready_for_guest_phase(OfficePhase::WinappsConfig)?;
+    if state.phase_status(OfficePhase::OfficeInstall) != Some(PhaseStatus::Done) {
+        return fail_winapps_config(
+            state,
+            profile_dir,
+            OfficeError::new(
+                OfficeError::WINAPPS_NO_CONFIG,
+                OfficePhase::WinappsConfig,
+                true,
+                Some(serde_json::json!({
+                    "detail": "A fase winapps_config exige office_install concluída.",
+                })),
+            ),
+        );
+    }
+    state.mark_phase_running(OfficePhase::WinappsConfig)?;
+
+    let map = env_file::read(env_path)?;
+    let config = match winapps::WinAppsConfig::from_env_map(&map) {
+        Ok(config) => config,
+        Err(err) => {
+            return fail_winapps_config(
+                state,
+                profile_dir,
+                OfficeError::new(
+                    OfficeError::WINAPPS_NO_CONFIG,
+                    OfficePhase::WinappsConfig,
+                    true,
+                    Some(serde_json::json!({ "detail": format!("{err:#}") })),
+                ),
+            );
+        }
+    };
+    let paths = winapps::WinAppsPaths::managed();
+    match winapps::configure_winapps(&config, &paths, client) {
+        Ok(setup) => {
+            mark_winapps_done(&mut state, setup)?;
+            state.save_to_dir(profile_dir)?;
+            Ok(state)
+        }
+        Err(err) => fail_winapps_config(state, profile_dir, err),
+    }
+}
+
+fn mark_winapps_done(
+    state: &mut OfficeProvisioningState,
+    setup: winapps::WinAppsSetup,
+) -> Result<()> {
+    state.mark_phase_done(
+        OfficePhase::WinappsConfig,
+        Some(PhaseEvidence {
+            files: vec![
+                setup.source_dir.display().to_string(),
+                setup.config_path.display().to_string(),
+            ],
+            launcher_ids: setup.launchers,
+            registry: Some(serde_json::json!({
+                "commit": setup.commit,
+                "exitCode": setup.exit_code,
+            })),
+            ..PhaseEvidence::default()
+        }),
+    )
+}
+
+fn fail_winapps_config(
+    mut state: OfficeProvisioningState,
+    profile_dir: &Path,
+    error: OfficeError,
+) -> Result<OfficeProvisioningState> {
+    let code = error.code();
+    state.mark_phase_failed(OfficeLastError {
+        code: code.to_string(),
+        message: winapps::winapps_error_message(code).to_string(),
+        phase: OfficePhase::WinappsConfig,
+        retryable: true,
+        details: error.fields().details.clone(),
+    });
+    state.save_to_dir(profile_dir)?;
+    Err(anyhow::anyhow!(error))
 }
 
 #[cfg(test)]

@@ -27,5 +27,6 @@ pub mod profile;
 pub mod snapshots;
 pub mod validation;
 pub mod vfio_setup;
+pub mod winapps;
 pub mod wsl_autostart;
 pub mod wsl_config_writer;
