@@ -1901,6 +1901,30 @@ mod tests {
     }
 
     #[test]
+    fn byol_backend_rejects_missing_acceptance() {
+        let err = start_provisioning_contract(OfficeStartProvisioningArgs {
+            name: "office".to_string(),
+            product_id: "O365ProPlusRetail".to_string(),
+            language: "pt-br".to_string(),
+            resources: Resources {
+                ram_gb: 8,
+                cpu_cores: 4,
+                disk_gb: 128,
+                storage_path: None,
+                warning_override: true,
+            },
+            byol_accepted: false,
+            telemetry_opt_in: None,
+            adoption_id: None,
+        })
+        .expect_err("backend must reject provisioning without BYOL acceptance");
+
+        assert_eq!(err.code(), OfficeError::BYOL_NOT_ACCEPTED);
+        assert_eq!(err.fields().phase, OfficePhase::ByolAcceptance);
+        assert!(!err.fields().retryable);
+    }
+
+    #[test]
     fn office_get_state_populates_active_sessions() {
         let root = temp_dir("state-active-sessions");
         let profile_dir = root.join("profile");

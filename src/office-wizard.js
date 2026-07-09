@@ -21,6 +21,15 @@ export const OFFICE_WIZARD_STEPS = ["intro", "profile", "license", "preflight"];
 
 export const OFFICE_WIZARD_PHASES = Object.keys(DEFAULT_PHASE_STATUSES);
 
+const BYOL_DISCLAIMER_KEYS = [
+  "officeWizard.byol.item.noLicense",
+  "officeWizard.byol.item.msMedia",
+  "officeWizard.byol.item.genericKeys",
+  "officeWizard.byol.item.technicalActivation",
+  "officeWizard.byol.item.singleUser",
+  "officeWizard.byol.item.eula",
+];
+
 export function initialOfficeWizardState(overrides = {}) {
   return {
     step: "intro",
@@ -43,9 +52,24 @@ export function initialOfficeWizardState(overrides = {}) {
 export function officeWizardReducer(state, action = {}) {
   const current = initialOfficeWizardState(state);
   if (action.type === "field") {
+    if (action.field === "byolAccepted") {
+      return {
+        ...current,
+        byolAccepted: Boolean(action.value),
+        errorCode: action.value ? "" : current.errorCode,
+        status: action.value && current.errorCode === "byol_not_accepted" ? "default" : current.status,
+        phaseStatuses: {
+          ...current.phaseStatuses,
+          byol_acceptance: action.value ? "done" : "pending",
+        },
+      };
+    }
     return { ...current, [action.field]: action.value };
   }
   if (action.type === "next") {
+    if (current.step === "license" && !canStartProvisioning(current)) {
+      return byolNotAcceptedState(current);
+    }
     const index = OFFICE_WIZARD_STEPS.indexOf(current.step);
     const next = OFFICE_WIZARD_STEPS[Math.min(index + 1, OFFICE_WIZARD_STEPS.length - 1)];
     return { ...current, step: next };
@@ -71,6 +95,10 @@ export function officeWizardReducer(state, action = {}) {
     return { ...current, status: action.status || "default", errorCode: action.errorCode || "" };
   }
   return current;
+}
+
+export function canStartProvisioning(state) {
+  return initialOfficeWizardState(state).byolAccepted === true;
 }
 
 export function officeWizardPhaseLabel(phase, { t }) {
@@ -102,6 +130,14 @@ export function officeWizardCta(state, { t }) {
     };
   }
   if (current.step === "preflight") {
+    if (!canStartProvisioning(current)) {
+      return {
+        action: "start",
+        label: t("officeWizard.cta.startPreflight"),
+        disabled: true,
+        reason: t("officeWizard.validation.byol"),
+      };
+    }
     return {
       action: "start",
       label: t("officeWizard.cta.startPreflight"),
@@ -165,6 +201,7 @@ export function bindOfficeWizard(root, deps = {}) {
   const dispatch = deps.dispatch || (() => {});
   const onClose = deps.onClose || (() => {});
   const onStart = deps.onStart || (() => {});
+  const getState = deps.getState || (() => deps.state || stateFromControls(root));
 
   const onInput = (event) => {
     const field = event.target.closest?.("[data-office-wizard-field]");
@@ -181,7 +218,12 @@ export function bindOfficeWizard(root, deps = {}) {
     if (!control || control.disabled) return;
     const action = control.dataset.officeWizardAction;
     if (action === "close") return onClose();
-    if (action === "start") return onStart();
+    if (action === "start") {
+      if (!canStartProvisioning(getState())) {
+        return dispatch({ type: "set_status", status: "error", errorCode: "byol_not_accepted" });
+      }
+      return onStart();
+    }
     if (action === "set-step") {
       return dispatch({ type: "set_step", step: control.dataset.officeWizardStep });
     }
@@ -204,6 +246,13 @@ export function bindOfficeWizard(root, deps = {}) {
     root.removeEventListener("click", onClick);
     root.removeEventListener("keydown", onKeydown);
   };
+}
+
+function stateFromControls(root) {
+  const byol = root.querySelector?.('[data-office-wizard-field="byolAccepted"]');
+  return initialOfficeWizardState({
+    byolAccepted: Boolean(byol?.checked),
+  });
 }
 
 function renderStepItem(step, index, currentIndex, { t, escapeHtml, escapeAttr }) {
@@ -241,15 +290,7 @@ function renderCurrentStep(state, deps) {
       </div>`;
   }
   if (state.step === "license") {
-    return `
-      <div class="office-wizard-copy">
-        <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.license.title"))}</h3>
-        <p>${escapeHtml(t("officeWizard.license.desc"))}</p>
-      </div>
-      <label class="office-wizard-check">
-        <input type="checkbox" data-office-wizard-field="byolAccepted" ${state.byolAccepted ? "checked" : ""} />
-        <span>${escapeHtml(t("officeWizard.license.accept"))}</span>
-      </label>`;
+    return renderByolStep(state, deps);
   }
   if (state.step === "preflight") {
     return `
@@ -268,6 +309,43 @@ function renderCurrentStep(state, deps) {
       <div><span>${escapeHtml(t("officeWizard.summary.profile"))}</span><strong>${escapeHtml(state.profileName)}</strong></div>
       <div><span>${escapeHtml(t("officeWizard.summary.office"))}</span><strong>${escapeHtml(state.productId)}</strong></div>
     </div>`;
+}
+
+export function renderByolStep(state, deps) {
+  const { t, escapeHtml } = deps;
+  const error = state.errorCode === "byol_not_accepted"
+    ? `<div class="office-wizard-callout" data-tone="danger" role="alert">${escapeHtml(t("officeWizard.byol.error"))}</div>`
+    : "";
+  const loading = state.status === "loading"
+    ? `<div class="office-wizard-callout" data-tone="info" aria-live="polite">${escapeHtml(t("officeWizard.byol.loading"))}</div>`
+    : "";
+  return `
+    <div class="office-wizard-copy">
+      <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.license.title"))}</h3>
+      <p id="office-wizard-byol-desc">${escapeHtml(t("officeWizard.license.desc"))}</p>
+    </div>
+    <ul class="office-wizard-disclaimer" aria-describedby="office-wizard-byol-desc">
+      ${BYOL_DISCLAIMER_KEYS.map(key => `<li>${escapeHtml(t(key))}</li>`).join("")}
+    </ul>
+    ${error}
+    ${loading}
+    <label class="office-wizard-check">
+      <input type="checkbox" data-office-wizard-field="byolAccepted"
+             aria-describedby="office-wizard-byol-desc" ${state.byolAccepted ? "checked" : ""} />
+      <span>${escapeHtml(t("officeWizard.license.accept"))}</span>
+    </label>`;
+}
+
+function byolNotAcceptedState(state) {
+  return {
+    ...state,
+    status: "error",
+    errorCode: "byol_not_accepted",
+    phaseStatuses: {
+      ...state.phaseStatuses,
+      byol_acceptance: "failed",
+    },
+  };
 }
 
 function renderPhaseList(state, deps) {

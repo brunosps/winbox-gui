@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   bindOfficeWizard,
+  canStartProvisioning,
   initialOfficeWizardState,
   officeWizardCta,
   officeWizardReducer,
+  renderByolStep,
   renderOfficeWizard,
 } from "./office-wizard.js";
 import { escapeAttr, escapeHtml } from "./dom-utils.js";
@@ -27,6 +29,14 @@ const dict = {
   "officeWizard.license.title": "Bring your own license",
   "officeWizard.license.desc": "Microsoft 365 activation happens inside Windows.",
   "officeWizard.license.accept": "I will use my own license.",
+  "officeWizard.byol.item.noLicense": "winbox does not provide Windows, Office, product keys or activation.",
+  "officeWizard.byol.item.msMedia": "Trial or evaluation media comes from Microsoft servers when applicable.",
+  "officeWizard.byol.item.genericKeys": "Generic install keys are not activation licenses.",
+  "officeWizard.byol.item.technicalActivation": "Technical activation does not prove legal ownership.",
+  "officeWizard.byol.item.singleUser": "This flow is scoped to one local user and one machine.",
+  "officeWizard.byol.item.eula": "Provisioning may accept Microsoft terms through AcceptEULA and unattend.",
+  "officeWizard.byol.error": "Accept BYOL before provisioning.",
+  "officeWizard.byol.loading": "Recording acceptance.",
   "officeWizard.preflight.title": "Pre-flight",
   "officeWizard.preflight.desc": "Check host requirements before provisioning.",
   "officeWizard.preflight.duration": "Provisioning can take around 45 minutes.",
@@ -123,6 +133,55 @@ test("office_wizard_cta_disables_invalid_profile_and_byol_gate", () => {
   assert.equal(preflight.action, "start");
 });
 
+test("byol_acceptance_blocks_side_effects_until_checked", () => {
+  const blocked = initialOfficeWizardState({ step: "preflight", byolAccepted: false });
+  assert.equal(canStartProvisioning(blocked), false);
+  assert.equal(officeWizardCta(blocked, deps).disabled, true);
+
+  const root = fakeRoot({ byolChecked: false });
+  const actions = [];
+  let starts = 0;
+  bindOfficeWizard(root, {
+    dispatch: action => actions.push(action),
+    onStart: () => {
+      starts += 1;
+    },
+  });
+  root.fire("click", fakeEvent(actionTarget("start")));
+
+  assert.equal(starts, 0);
+  assert.deepEqual(actions, [
+    { type: "set_status", status: "error", errorCode: "byol_not_accepted" },
+  ]);
+
+  const acceptedRoot = fakeRoot({ byolChecked: true });
+  bindOfficeWizard(acceptedRoot, {
+    dispatch: action => actions.push(action),
+    onStart: () => {
+      starts += 1;
+    },
+  });
+  acceptedRoot.fire("click", fakeEvent(actionTarget("start")));
+  assert.equal(starts, 1);
+});
+
+test("renderByolStep_shows_required_disclaimer_and_alert_states", () => {
+  const html = renderByolStep(
+    initialOfficeWizardState({
+      step: "license",
+      errorCode: "byol_not_accepted",
+    }),
+    deps,
+  );
+
+  assert.match(html, /does not provide Windows, Office, product keys or activation/);
+  assert.match(html, /Generic install keys are not activation licenses/);
+  assert.match(html, /Technical activation does not prove legal ownership/);
+  assert.match(html, /AcceptEULA and unattend/);
+  assert.match(html, /role="alert"/);
+  assert.doesNotMatch(html, /<script/);
+});
+
 test("office_wizard_initial_state_is_keyboard_reachable", () => {
   const html = renderOfficeWizard(initialOfficeWizardState(), deps);
 
@@ -166,13 +225,32 @@ test("office_wizard_locale_keys_are_parallel", () => {
   assert.deepEqual(pt, en);
 });
 
+test("byol_disclaimer_i18n_parallel", () => {
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+  const required = [
+    "officeWizard.byol.item.noLicense",
+    "officeWizard.byol.item.msMedia",
+    "officeWizard.byol.item.genericKeys",
+    "officeWizard.byol.item.technicalActivation",
+    "officeWizard.byol.item.singleUser",
+    "officeWizard.byol.item.eula",
+    "officeWizard.byol.error",
+  ];
+
+  for (const key of required) {
+    assert.equal(en.includes(key), true, `${key} missing in en-US`);
+    assert.equal(pt.includes(key), true, `${key} missing in pt-BR`);
+  }
+});
+
 function officeWizardKeys(path) {
   return [...readFileSync(path, "utf8").matchAll(/"((?:app\.newProfile\.office)|(?:officeWizard\.[^"]+))":/g)]
     .map(match => match[1])
     .sort();
 }
 
-function fakeRoot() {
+function fakeRoot(options = {}) {
   const listeners = new Map();
   return {
     addEventListener(type, fn) {
@@ -183,6 +261,10 @@ function fakeRoot() {
     },
     fire(type, event) {
       listeners.get(type)?.(event);
+    },
+    querySelector(selector) {
+      if (selector !== '[data-office-wizard-field="byolAccepted"]') return null;
+      return { checked: Boolean(options.byolChecked) };
     },
   };
 }
