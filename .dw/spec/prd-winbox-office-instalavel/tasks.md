@@ -45,7 +45,7 @@ feat/prd-winbox-office-instalavel
 | 18.0 | Criar shell do wizard Office e entrada no app | FR-1.2, FR-4.1 | 10.0 | Concluída |
 | 19.0 | Implementar aceite BYOL e bloqueios legais no wizard | FR-3.1, FR-3.2 | 18.0 | Concluída |
 | 20.0 | Implementar UI de preflight, warnings e adoção | FR-2.2, FR-6.4 | 4.0, 6.0, 14.0, 18.0 | Concluída |
-| 21.0 | Implementar UI de provisionamento, duração e progresso | FR-4.5, FR-4.6 | 10.0, 11.0, 18.0 | Pendente |
+| 21.0 | Implementar UI de provisionamento, duração e progresso | FR-4.5, FR-4.6 | 10.0, 11.0, 18.0 | Concluída |
 | 22.0 | Implementar orientação pós-launch, ativação e i18n final | FR-7.2, FR-7.3 | 16.0, 18.0 | Pendente |
 | 23.0 | Publicar escopo single-user e orientação de licença | FR-3.3, FR-3.4 | 1.0, 18.0 | Pendente |
 | 24.0 | Implementar cliente de telemetria opt-in | FR-8.1, FR-8.2 | 18.0 | Pendente |
@@ -77,7 +77,7 @@ feat/prd-winbox-office-instalavel
 - [x] 18.0 Criar shell do wizard Office e entrada no app
 - [x] 19.0 Implementar aceite BYOL e bloqueios legais no wizard
 - [x] 20.0 Implementar UI de preflight, warnings e adoção
-- [ ] 21.0 Implementar UI de provisionamento, duração e progresso
+- [x] 21.0 Implementar UI de provisionamento, duração e progresso
 - [ ] 22.0 Implementar orientação pós-launch, ativação e i18n final
 - [ ] 23.0 Publicar escopo single-user e orientação de licença
 - [ ] 24.0 Implementar cliente de telemetria opt-in

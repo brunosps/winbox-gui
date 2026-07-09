@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  applyOfficeProgressEvent,
   bindOfficeWizard,
   canStartProvisioning,
   canContinueFromPreflight,
@@ -12,7 +13,14 @@ import {
   renderByolStep,
   renderOfficeWizard,
   renderPreflightStep,
+  renderProvisioningStep,
+  stateFromProvisioningResponse,
 } from "./office-wizard.js";
+import {
+  initialOfficeProgressWindowState,
+  officeProgressWindowReducer,
+  renderOfficeProgressWindow,
+} from "./office-progress-window.js";
 import { escapeAttr, escapeHtml } from "./dom-utils.js";
 
 const dict = {
@@ -25,6 +33,7 @@ const dict = {
   "officeWizard.step.profile": "Profile",
   "officeWizard.step.license": "License",
   "officeWizard.step.preflight": "Pre-flight",
+  "officeWizard.step.provisioning": "Provisioning",
   "officeWizard.intro.title": "Create Office profile",
   "officeWizard.intro.desc": "Use the wizard to provision the VM.",
   "officeWizard.profile.title": "Profile settings",
@@ -43,6 +52,12 @@ const dict = {
   "officeWizard.preflight.title": "Pre-flight",
   "officeWizard.preflight.desc": "Check host requirements before provisioning.",
   "officeWizard.preflight.duration": "Provisioning can take around 45 minutes.",
+  "officeWizard.provisioning.title": "Provisioning Office",
+  "officeWizard.provisioning.desc": "Leave the computer online while winbox works through the phases.",
+  "officeWizard.provisioning.durationTitle": "Duration expectation",
+  "officeWizard.provisioning.duration": "This can take up to around 45 minutes and needs no interaction.",
+  "officeWizard.provisioning.largeDownload": "Large downloads can take longer on slow networks.",
+  "officeWizard.provisioning.failed": "Provisioning failed.",
   "officeWizard.preflight.loading": "Checking host.",
   "officeWizard.preflight.blocked": "Resolve blockers before provisioning.",
   "officeWizard.preflight.checksLabel": "Pre-flight checks",
@@ -88,6 +103,13 @@ const dict = {
   "officeWizard.phase.windows_prepare": "Windows prepare",
   "officeWizard.phase.windows_install": "Windows install",
   "officeWizard.phase.remoteapp_prepare": "RemoteApp prepare",
+  "officeWizard.phase.office_stage_odt": "Stage ODT",
+  "officeWizard.phase.office_install": "Install Office",
+  "officeWizard.phase.winapps_config": "Configure WinApps",
+  "officeWizard.phase.desktop_registration": "Desktop registration",
+  "officeWizard.phase.file_association": "File associations",
+  "officeWizard.phase.final_verify": "Final verification",
+  "officeWizard.phase.first_launch": "First launch",
   "officeWizard.status.pending": "Pending",
   "officeWizard.status.running": "Running",
   "officeWizard.status.done": "Done",
@@ -97,9 +119,17 @@ const dict = {
   "officeWizard.cta.continue": "Continue",
   "officeWizard.cta.loading": "Working",
   "officeWizard.cta.startPreflight": "Run pre-flight",
+  "officeWizard.cta.continueProvisioning": "Continue",
+  "officeWizard.cta.provisioning": "Provisioning",
   "officeWizard.validation.profileName": "Use lowercase letters, numbers, _ or -.",
   "officeWizard.validation.byol": "Accept BYOL to continue.",
   "officeWizard.profileFor": "Office profile {name}",
+  "officeProgress.eyebrow": "Office",
+  "officeProgress.title": "Office is starting",
+  "officeProgress.subtitle": "Opening {app} from {profile}.",
+  "officeProgress.officeApp": "Office app",
+  "officeProgress.waiting": "Waiting for progress.",
+  "officeProgress.closeHint": "This window can stay open while the app starts.",
 };
 
 const deps = {
@@ -309,6 +339,108 @@ test("adoption_review_requires_explicit_choice", () => {
   assert.equal(canContinueFromPreflight(confirmed), true);
 });
 
+test("provisioning_intro_shows_duration_expectation", () => {
+  const html = renderProvisioningStep(
+    initialOfficeWizardState({ step: "provisioning" }),
+    deps,
+  );
+
+  assert.match(html, /up to around 45 minutes/);
+  assert.match(html, /needs no interaction/);
+  assert.match(html, /Large downloads/);
+});
+
+test("provisioning_progress_uses_aria_live", () => {
+  const state = applyOfficeProgressEvent(
+    initialOfficeWizardState({ profileName: "office", step: "provisioning" }),
+    {
+      type: "operation-progress",
+      profile: "office",
+      op: "office_provision",
+      step: "office_odt_install",
+      status: "running",
+      message: "Downloading Office payload <slow>",
+      timestamp: "2026-07-08T12:00:00Z",
+    },
+  );
+  const html = renderProvisioningStep(state, deps);
+
+  assert.equal(state.phaseStatuses.office_install, "running");
+  assert.match(html, /aria-live="polite"/);
+  assert.match(html, /Downloading Office payload &lt;slow&gt;/);
+  assert.doesNotMatch(html, /<slow>/);
+});
+
+test("wizard_resume_renders_persisted_failed_phase", () => {
+  const resumed = stateFromProvisioningResponse(initialOfficeWizardState(), {
+    status: "failed",
+    phases: {
+      preflight: { status: "done" },
+      office_install: { status: "failed" },
+      final_verify: { status: "pending" },
+    },
+    lastError: {
+      code: "guest_phase_timeout",
+      message: "Office marker did not appear.",
+      phase: "office_install",
+      retryable: true,
+    },
+  });
+
+  assert.equal(resumed.step, "provisioning");
+  assert.equal(resumed.phaseStatuses.office_install, "failed");
+  assert.equal(resumed.errorCode, "guest_phase_timeout");
+  assert.match(renderProvisioningStep(resumed, deps), /Office marker did not appear/);
+});
+
+test("retry_ui_repaints_invalidated_descendants", () => {
+  const afterRetry = stateFromProvisioningResponse(
+    initialOfficeWizardState({
+      step: "provisioning",
+      phaseStatuses: {
+        winapps_config: "done",
+        desktop_registration: "done",
+        final_verify: "done",
+      },
+    }),
+    {
+      status: "running",
+      phases: {
+        winapps_config: { status: "running" },
+        desktop_registration: { status: "pending" },
+        file_association: { status: "pending" },
+        final_verify: { status: "pending" },
+      },
+    },
+  );
+
+  assert.equal(afterRetry.phaseStatuses.winapps_config, "running");
+  assert.equal(afterRetry.phaseStatuses.desktop_registration, "pending");
+  assert.equal(afterRetry.phaseStatuses.final_verify, "pending");
+});
+
+test("office_progress_window_renders_same_operation_events", () => {
+  const state = officeProgressWindowReducer(
+    initialOfficeProgressWindowState({ profileName: "office", appId: "excel" }),
+    {
+      type: "operation_progress",
+      event: {
+        type: "operation-progress",
+        profile: "office",
+        op: "office_launch",
+        step: "office_cold_start",
+        status: "running",
+        message: "Starting VM before Excel",
+      },
+    },
+  );
+  const html = renderOfficeProgressWindow(state, deps);
+
+  assert.equal(state.wizardState.phaseStatuses.first_launch, "running");
+  assert.match(html, /Starting VM before Excel/);
+  assert.match(html, /aria-live="polite"/);
+});
+
 test("office_wizard_initial_state_is_keyboard_reachable", () => {
   const html = renderOfficeWizard(initialOfficeWizardState(), deps);
 
@@ -389,8 +521,27 @@ test("preflight_and_adoption_i18n_parallel", () => {
   }
 });
 
+test("provisioning_and_progress_window_i18n_parallel", () => {
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+  const required = [
+    "officeWizard.step.provisioning",
+    "officeWizard.provisioning.duration",
+    "officeWizard.provisioning.largeDownload",
+    "officeWizard.phase.office_install",
+    "officeWizard.phase.final_verify",
+    "officeProgress.title",
+    "officeProgress.subtitle",
+  ];
+
+  for (const key of required) {
+    assert.equal(en.includes(key), true, `${key} missing in en-US`);
+    assert.equal(pt.includes(key), true, `${key} missing in pt-BR`);
+  }
+});
+
 function officeWizardKeys(path) {
-  return [...readFileSync(path, "utf8").matchAll(/"((?:app\.newProfile\.office)|(?:officeWizard\.[^"]+))":/g)]
+  return [...readFileSync(path, "utf8").matchAll(/"((?:app\.newProfile\.office)|(?:officeWizard\.[^"]+)|(?:officeProgress\.[^"]+))":/g)]
     .map(match => match[1])
     .sort();
 }

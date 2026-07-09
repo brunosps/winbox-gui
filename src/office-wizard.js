@@ -17,9 +17,29 @@ const DEFAULT_PHASE_STATUSES = {
   first_launch: "pending",
 };
 
-export const OFFICE_WIZARD_STEPS = ["intro", "profile", "license", "preflight"];
+export const OFFICE_WIZARD_STEPS = ["intro", "profile", "license", "preflight", "provisioning"];
 
 export const OFFICE_WIZARD_PHASES = Object.keys(DEFAULT_PHASE_STATUSES);
+
+const PROGRESS_STEP_PHASE = {
+  office_preflight: "preflight",
+  office_byol: "byol_acceptance",
+  office_profile_config: "profile_config",
+  office_windows_prepare: "windows_prepare",
+  office_windows_install: "windows_install",
+  office_rdp_wait: "remoteapp_prepare",
+  office_remoteapp_prepare: "remoteapp_prepare",
+  office_odt_stage: "office_stage_odt",
+  office_odt_install: "office_install",
+  office_verify_install: "office_install",
+  office_winapps_clone: "winapps_config",
+  office_winapps_setup: "winapps_config",
+  office_desktop_register: "desktop_registration",
+  office_file_association: "file_association",
+  office_final_verify: "final_verify",
+  office_cold_start: "first_launch",
+  office_launch_remoteapp: "first_launch",
+};
 
 const BYOL_DISCLAIMER_KEYS = [
   "officeWizard.byol.item.noLicense",
@@ -50,6 +70,8 @@ export function initialOfficeWizardState(overrides = {}) {
     preflightChecks: [],
     adoptionCandidates: [],
     managedScope: {},
+    lastProgress: null,
+    lastError: null,
     status: "default",
     errorCode: "",
     phaseStatuses: { ...DEFAULT_PHASE_STATUSES },
@@ -129,6 +151,12 @@ export function officeWizardReducer(state, action = {}) {
   if (action.type === "set_status") {
     return { ...current, status: action.status || "default", errorCode: action.errorCode || "" };
   }
+  if (action.type === "operation_progress") {
+    return applyOfficeProgressEvent(current, action.event || {});
+  }
+  if (action.type === "provisioning_state") {
+    return stateFromProvisioningResponse(current, action.response || {});
+  }
   return current;
 }
 
@@ -158,6 +186,9 @@ export function officeWizardCta(state, { t }) {
   const profileName = String(current.profileName || "").trim();
   if (current.status === "loading") {
     return { action: "wait", label: t("officeWizard.cta.loading"), disabled: true };
+  }
+  if (current.step === "provisioning") {
+    return { action: "wait", label: t("officeWizard.cta.provisioning"), disabled: true };
   }
   if (current.step === "profile" && !/^[a-z0-9][a-z0-9_-]*$/.test(profileName)) {
     return {
@@ -200,6 +231,63 @@ export function officeWizardCta(state, { t }) {
     };
   }
   return { action: "next", label: t("officeWizard.cta.continue"), disabled: false };
+}
+
+export function applyOfficeProgressEvent(state, event = {}) {
+  const current = initialOfficeWizardState(state);
+  const profile = String(event.profile || "");
+  if (profile && profile !== String(current.profileName || "")) return current;
+  const phase = PROGRESS_STEP_PHASE[String(event.step || "")];
+  const normalizedStatus = progressStatusToPhaseStatus(event.status);
+  const next = {
+    ...current,
+    step: "provisioning",
+    status: normalizedStatus === "failed" ? "error" : "loading",
+    errorCode: normalizedStatus === "failed" ? String(event.code || "office_progress_failed") : "",
+    lastProgress: {
+      type: String(event.type || "operation-progress"),
+      profile,
+      operation: String(event.operation || event.op || ""),
+      phase: phase || "",
+      step: String(event.step || ""),
+      status: String(event.status || ""),
+      message: String(event.message || ""),
+      timestamp: String(event.timestamp || ""),
+    },
+  };
+  if (!phase) return next;
+  return {
+    ...next,
+    phaseStatuses: {
+      ...next.phaseStatuses,
+      [phase]: normalizedStatus,
+    },
+    lastError: normalizedStatus === "failed"
+      ? {
+          code: String(event.code || "office_progress_failed"),
+          phase,
+          message: String(event.message || ""),
+        }
+      : next.lastError,
+  };
+}
+
+export function stateFromProvisioningResponse(state, response = {}) {
+  const current = initialOfficeWizardState(state);
+  const phases = normalizePhaseStatuses(response.phases);
+  const status = String(response.status || current.status || "");
+  const lastError = response.lastError || response.last_error || null;
+  return {
+    ...current,
+    step: hasStartedProvisioning(phases, status, lastError) ? "provisioning" : current.step,
+    status: lastError ? "error" : status === "ready" ? "success" : current.status,
+    errorCode: lastError?.code || current.errorCode || "",
+    lastError,
+    phaseStatuses: {
+      ...current.phaseStatuses,
+      ...phases,
+    },
+  };
 }
 
 export function renderOfficeWizard(state, deps) {
@@ -358,6 +446,9 @@ function renderCurrentStep(state, deps) {
   if (state.step === "preflight") {
     return renderPreflightStep(state, deps);
   }
+  if (state.step === "provisioning") {
+    return renderProvisioningStep(state, deps);
+  }
   return `
     <div class="office-wizard-copy">
       <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.intro.title"))}</h3>
@@ -367,6 +458,37 @@ function renderCurrentStep(state, deps) {
       <div><span>${escapeHtml(t("officeWizard.summary.profile"))}</span><strong>${escapeHtml(state.profileName)}</strong></div>
       <div><span>${escapeHtml(t("officeWizard.summary.office"))}</span><strong>${escapeHtml(state.productId)}</strong></div>
     </div>`;
+}
+
+export function renderProvisioningStep(state, deps) {
+  const { t, escapeHtml } = deps;
+  const current = initialOfficeWizardState(state);
+  const progressMessage = current.lastProgress?.message || "";
+  const failure = current.lastError
+    ? `<div class="office-wizard-callout" data-tone="danger" role="alert">${escapeHtml(current.lastError.message || current.lastError.code || t("officeWizard.provisioning.failed"))}</div>`
+    : "";
+  return `
+    <div class="office-wizard-copy">
+      <h3 id="office-wizard-current-title">${escapeHtml(t("officeWizard.provisioning.title"))}</h3>
+      <p>${escapeHtml(t("officeWizard.provisioning.desc"))}</p>
+    </div>
+    ${renderProvisioningIntro(deps)}
+    ${progressMessage ? `<div class="office-wizard-callout" data-tone="info" aria-live="polite">${escapeHtml(progressMessage)}</div>` : ""}
+    ${failure}
+    ${renderProvisioningTimeline(current, deps)}`;
+}
+
+export function renderProvisioningIntro({ t, escapeHtml }) {
+  return `
+    <div class="office-wizard-provisioning-intro" data-testid="office-provisioning-intro">
+      <strong>${escapeHtml(t("officeWizard.provisioning.durationTitle"))}</strong>
+      <p>${escapeHtml(t("officeWizard.provisioning.duration"))}</p>
+      <p>${escapeHtml(t("officeWizard.provisioning.largeDownload"))}</p>
+    </div>`;
+}
+
+export function renderProvisioningTimeline(state, deps) {
+  return renderPhaseList(initialOfficeWizardState(state), deps, { all: true });
 }
 
 export function renderPreflightStep(state, deps) {
@@ -472,11 +594,12 @@ function byolNotAcceptedState(state) {
   };
 }
 
-function renderPhaseList(state, deps) {
+function renderPhaseList(state, deps, options = {}) {
   const { t, escapeHtml, escapeAttr } = deps;
+  const phases = options.all ? OFFICE_WIZARD_PHASES : OFFICE_WIZARD_PHASES.slice(0, 6);
   return `
     <ol class="office-wizard-phases" aria-label="${escapeAttr(t("officeWizard.phasesLabel"))}">
-      ${OFFICE_WIZARD_PHASES.slice(0, 6).map(phase => {
+      ${phases.map(phase => {
         const status = state.phaseStatuses[phase] || "pending";
         return `
           <li data-status="${escapeAttr(status)}">
@@ -486,6 +609,35 @@ function renderPhaseList(state, deps) {
           </li>`;
       }).join("")}
     </ol>`;
+}
+
+function progressStatusToPhaseStatus(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (["success", "complete", "completed", "done"].includes(normalized)) return "done";
+  if (["error", "failed", "failure"].includes(normalized)) return "failed";
+  if (["skipped", "skip"].includes(normalized)) return "skipped";
+  if (normalized === "running") return "running";
+  return "pending";
+}
+
+function normalizePhaseStatuses(phases) {
+  if (!phases || typeof phases !== "object") return {};
+  return Object.fromEntries(
+    OFFICE_WIZARD_PHASES
+      .filter(phase => phases[phase])
+      .map(phase => [phase, normalizePhaseStatusValue(phases[phase])]),
+  );
+}
+
+function normalizePhaseStatusValue(value) {
+  if (typeof value === "string") return progressStatusToPhaseStatus(value);
+  return progressStatusToPhaseStatus(value?.status || "pending");
+}
+
+function hasStartedProvisioning(phases, status, lastError) {
+  if (lastError) return true;
+  if (["running", "blocked", "ready", "failed", "adopted"].includes(status)) return true;
+  return Object.values(phases).some(value => value !== "pending");
 }
 
 function renderPreflightCheck(check, { t, escapeHtml, escapeAttr }) {

@@ -1260,6 +1260,28 @@ textarea.field-input {
   overflow-wrap: anywhere;
 }
 
+.office-wizard-provisioning-intro,
+.office-progress-window-status,
+.office-progress-window-hint {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.office-wizard-provisioning-intro {
+  display: grid;
+  gap: 6px;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.office-wizard-provisioning-intro p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .office-wizard-action-hint {
   color: var(--title) !important;
   font-weight: 650;
@@ -1373,6 +1395,54 @@ textarea.field-input {
   display: grid;
   justify-items: end;
   gap: 6px;
+}
+
+.office-progress-window {
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 18px;
+}
+
+body[data-window="office-progress"] .app-header {
+  display: none;
+}
+
+body[data-window="office-progress"] .main {
+  min-height: 100dvh;
+  padding: 18px;
+}
+
+.office-progress-window-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.office-progress-window-header h2 {
+  margin: 0;
+  color: var(--title);
+  letter-spacing: 0;
+}
+
+.office-progress-window-header p,
+.office-progress-window-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.office-progress-window-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--control-h);
+}
+
+.office-progress-window-status strong {
+  overflow-wrap: anywhere;
 }
 
 .toast {
