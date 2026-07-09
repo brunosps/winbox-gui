@@ -98,6 +98,40 @@ pub struct WinAppsCommandOutput {
     pub stderr: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RdpSessionCommandOutput {
+    pub success: bool,
+    pub status_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub trait RdpSessionProbe {
+    fn pgrep_xfreerdp(&self) -> Result<RdpSessionCommandOutput>;
+    fn ss_tcp_processes(&self) -> Result<RdpSessionCommandOutput>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CliRdpSessionProbe;
+
+impl RdpSessionProbe for CliRdpSessionProbe {
+    fn pgrep_xfreerdp(&self) -> Result<RdpSessionCommandOutput> {
+        Command::new("pgrep")
+            .args(["-af", "xfreerdp"])
+            .output()
+            .map(rdp_session_command_output)
+            .context("executando pgrep -af xfreerdp")
+    }
+
+    fn ss_tcp_processes(&self) -> Result<RdpSessionCommandOutput> {
+        Command::new("ss")
+            .args(["-Htnp"])
+            .output()
+            .map(rdp_session_command_output)
+            .context("executando ss -Htnp")
+    }
+}
+
 pub trait WinAppsClient {
     fn git(&self, cwd: Option<&Path>, args: &[String]) -> Result<WinAppsCommandOutput>;
     fn setup(&self, source_dir: &Path, args: &[String]) -> Result<WinAppsCommandOutput>;
@@ -1456,6 +1490,82 @@ fn command_output(output: std::process::Output) -> WinAppsCommandOutput {
     }
 }
 
+fn rdp_session_command_output(output: std::process::Output) -> RdpSessionCommandOutput {
+    RdpSessionCommandOutput {
+        success: output.status.success(),
+        status_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    }
+}
+
+pub fn detect_active_rdp_sessions(probe: &dyn RdpSessionProbe, rdp_port: u16) -> Option<bool> {
+    if rdp_port == 0 {
+        return None;
+    }
+
+    let pgrep = probe.pgrep_xfreerdp().ok()?;
+    if !pgrep.success {
+        return if pgrep.status_code == Some(1) {
+            Some(false)
+        } else {
+            None
+        };
+    }
+
+    let pids = parse_pgrep_xfreerdp_pids(&pgrep.stdout);
+    if pids.is_empty() {
+        return Some(false);
+    }
+
+    let ss = probe.ss_tcp_processes().ok()?;
+    if !ss.success {
+        return None;
+    }
+
+    Some(ss_has_xfreerdp_connection_to_port(
+        &ss.stdout, rdp_port, &pids,
+    ))
+}
+
+fn parse_pgrep_xfreerdp_pids(output: &str) -> Vec<u32> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || !line.contains("xfreerdp") {
+                return None;
+            }
+            line.split_whitespace().next()?.parse::<u32>().ok()
+        })
+        .collect()
+}
+
+fn ss_has_xfreerdp_connection_to_port(output: &str, rdp_port: u16, pids: &[u32]) -> bool {
+    output.lines().any(|line| {
+        let line = line.trim();
+        line.contains("ESTAB")
+            && ss_line_mentions_port(line, rdp_port)
+            && (ss_line_mentions_xfreerdp_pid(line, pids)
+                || (!line.contains("pid=") && !pids.is_empty()))
+    })
+}
+
+fn ss_line_mentions_port(line: &str, rdp_port: u16) -> bool {
+    let port = format!(":{rdp_port}");
+    line.split_whitespace().any(|part| {
+        let endpoint = part.trim_matches(|c| c == '[' || c == ']');
+        endpoint.ends_with(&port) || endpoint.contains(&format!("{port} "))
+    })
+}
+
+fn ss_line_mentions_xfreerdp_pid(line: &str, pids: &[u32]) -> bool {
+    line.contains("xfreerdp")
+        || pids.iter().any(|pid| {
+            line.contains(&format!("pid={pid},")) || line.contains(&format!("pid={pid})"))
+        })
+}
+
 #[cfg(test)]
 pub mod mock {
     use super::{WinAppsClient, WinAppsCommandOutput};
@@ -1530,9 +1640,31 @@ mod tests {
     use super::*;
     use crate::core::docker::mock::MockDocker;
     use crate::core::office_state::{OfficeProvisioningState, PhaseEvidence};
+    use anyhow::Result;
     use mock::MockWinAppsClient;
     use std::collections::BTreeSet;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct MockRdpSessionProbe {
+        pgrep: Result<RdpSessionCommandOutput>,
+        ss: Result<RdpSessionCommandOutput>,
+    }
+
+    impl RdpSessionProbe for MockRdpSessionProbe {
+        fn pgrep_xfreerdp(&self) -> Result<RdpSessionCommandOutput> {
+            self.pgrep
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|err| anyhow::anyhow!("{err:#}"))
+        }
+
+        fn ss_tcp_processes(&self) -> Result<RdpSessionCommandOutput> {
+            self.ss
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|err| anyhow::anyhow!("{err:#}"))
+        }
+    }
 
     #[test]
     fn winapps_conf_quotes_rdp_credentials_for_bash_source() {
@@ -1824,6 +1956,44 @@ application/vnd.ms-excel=excel-o365.desktop;libreoffice-calc.desktop;\n";
         assert!(!empty_scope.preserve_existing_winapps_clone);
     }
 
+    #[test]
+    fn active_session_detected_by_xfreerdp_port() {
+        let probe = MockRdpSessionProbe {
+            pgrep: Ok(rdp_ok("1234 xfreerdp /v:127.0.0.1:3391\n")),
+            ss: Ok(rdp_ok(
+                "ESTAB 0 0 127.0.0.1:52122 127.0.0.1:3391 users:((\"xfreerdp\",pid=1234,fd=7))\n",
+            )),
+        };
+
+        assert_eq!(detect_active_rdp_sessions(&probe, 3391), Some(true));
+    }
+
+    #[test]
+    fn active_session_detection_handles_empty_and_indeterminate() {
+        let no_process = MockRdpSessionProbe {
+            pgrep: Ok(RdpSessionCommandOutput {
+                success: false,
+                status_code: Some(1),
+                stdout: String::new(),
+                stderr: String::new(),
+            }),
+            ss: Ok(rdp_ok("")),
+        };
+        assert_eq!(detect_active_rdp_sessions(&no_process, 3391), Some(false));
+
+        let ss_failed = MockRdpSessionProbe {
+            pgrep: Ok(rdp_ok("1234 xfreerdp /v:127.0.0.1:3391\n")),
+            ss: Ok(RdpSessionCommandOutput {
+                success: false,
+                status_code: Some(1),
+                stdout: String::new(),
+                stderr: "netlink indisponível".to_string(),
+            }),
+        };
+        assert_eq!(detect_active_rdp_sessions(&ss_failed, 3391), None);
+        assert_eq!(detect_active_rdp_sessions(&ss_failed, 0), None);
+    }
+
     fn sample_config(user: &str, pass: &str) -> WinAppsConfig {
         WinAppsConfig {
             rdp_user: user.to_string(),
@@ -1853,6 +2023,15 @@ application/vnd.ms-excel=excel-o365.desktop;libreoffice-calc.desktop;\n";
             status_code: Some(code),
             stdout: String::new(),
             stderr: stderr.to_string(),
+        }
+    }
+
+    fn rdp_ok(stdout: &str) -> RdpSessionCommandOutput {
+        RdpSessionCommandOutput {
+            success: true,
+            status_code: Some(0),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
         }
     }
 

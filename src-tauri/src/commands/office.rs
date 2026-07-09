@@ -25,7 +25,7 @@ use crate::core::{
         OfficeProvisioningState, PhaseEvidence, PhaseState, PhaseStatus,
     },
     paths,
-    winapps::{self, CliWinAppsClient, WinAppsClient},
+    winapps::{self, CliRdpSessionProbe, CliWinAppsClient, RdpSessionProbe, WinAppsClient},
 };
 
 pub const OFFICE_PROGRESS_STEPS: &[&str] = &[
@@ -264,7 +264,26 @@ pub fn preflight_contract(
 pub fn get_state_contract(
     args: OfficeNameArgs,
 ) -> std::result::Result<OfficeStateResponse, OfficeError> {
-    let state = load_office_state_for_contract(&args.name)?;
+    get_state_with_probe(args, &CliRdpSessionProbe)
+}
+
+fn get_state_with_probe(
+    args: OfficeNameArgs,
+    probe: &dyn RdpSessionProbe,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    let profile_dir = paths::profile_cfg_dir(&args.name);
+    let env_path = paths::profile_env_file(&args.name);
+    get_state_at(args, &profile_dir, &env_path, probe)
+}
+
+fn get_state_at(
+    args: OfficeNameArgs,
+    profile_dir: &Path,
+    env_path: &Path,
+    probe: &dyn RdpSessionProbe,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    let mut state = load_office_state_at(profile_dir, &args.name)?;
+    state.active_sessions = active_sessions_from_env(env_path, probe);
     Ok(state_response(&state))
 }
 
@@ -733,13 +752,6 @@ fn mark_phase_done_idempotent(
         .map_err(state_conflict)
 }
 
-fn load_office_state_for_contract(
-    profile: &str,
-) -> std::result::Result<OfficeProvisioningState, OfficeError> {
-    let profile_dir = paths::profile_cfg_dir(profile);
-    load_office_state_at(&profile_dir, profile)
-}
-
 fn load_office_state_at(
     profile_dir: &Path,
     profile: &str,
@@ -761,6 +773,11 @@ fn load_office_state_at(
         ));
     }
     Ok(state)
+}
+
+fn active_sessions_from_env(env_path: &Path, probe: &dyn RdpSessionProbe) -> Option<bool> {
+    let env = env_file::read(env_path).ok()?;
+    winapps::detect_active_rdp_sessions(probe, env_file::get_u16(&env, "RDP_PORT"))
 }
 
 fn state_response(state: &OfficeProvisioningState) -> OfficeStateResponse {
@@ -1809,6 +1826,27 @@ mod tests {
     use std::cell::RefCell;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    struct MockRdpSessionProbe {
+        pgrep: anyhow::Result<winapps::RdpSessionCommandOutput>,
+        ss: anyhow::Result<winapps::RdpSessionCommandOutput>,
+    }
+
+    impl RdpSessionProbe for MockRdpSessionProbe {
+        fn pgrep_xfreerdp(&self) -> anyhow::Result<winapps::RdpSessionCommandOutput> {
+            self.pgrep
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|err| anyhow::anyhow!("{err:#}"))
+        }
+
+        fn ss_tcp_processes(&self) -> anyhow::Result<winapps::RdpSessionCommandOutput> {
+            self.ss
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|err| anyhow::anyhow!("{err:#}"))
+        }
+    }
+
     #[test]
     fn office_preflight_args_match_start_provisioning() {
         let preflight: OfficePreflightArgs = serde_json::from_value(serde_json::json!({
@@ -1860,6 +1898,39 @@ mod tests {
             snake_case_start.resources.ram_gb,
             preflight.resources.ram_gb
         );
+    }
+
+    #[test]
+    fn office_get_state_populates_active_sessions() {
+        let root = temp_dir("state-active-sessions");
+        let profile_dir = root.join("profile");
+        std::fs::create_dir_all(&profile_dir).expect("profile dir should exist");
+        let env_path = profile_dir.join("config.env");
+        std::fs::write(&env_path, "PROFILE_KIND=office\nRDP_PORT=3391\n")
+            .expect("env should be written");
+        let mut state = OfficeProvisioningState::new("office");
+        state
+            .save_to_dir(&profile_dir)
+            .expect("state should be saved");
+        let probe = MockRdpSessionProbe {
+            pgrep: Ok(rdp_ok("1234 xfreerdp /v:127.0.0.1:3391\n")),
+            ss: Ok(rdp_ok(
+                "ESTAB 0 0 127.0.0.1:52122 127.0.0.1:3391 users:((\"xfreerdp\",pid=1234,fd=7))\n",
+            )),
+        };
+
+        let response = get_state_at(
+            OfficeNameArgs {
+                name: "office".into(),
+            },
+            &profile_dir,
+            &env_path,
+            &probe,
+        )
+        .expect("state should load");
+
+        assert_eq!(response.active_sessions, Some(true));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2551,6 +2622,15 @@ mod tests {
         assert_eq!(last_error.code, OfficeError::GUEST_PHASE_TIMEOUT);
         assert_eq!(last_error.phase, OfficePhase::OfficeInstall);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn rdp_ok(stdout: &str) -> winapps::RdpSessionCommandOutput {
+        winapps::RdpSessionCommandOutput {
+            success: true,
+            status_code: Some(0),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        }
     }
 
     fn temp_dir(name: &str) -> PathBuf {
