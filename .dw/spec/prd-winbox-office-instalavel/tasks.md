@@ -49,7 +49,7 @@ feat/prd-winbox-office-instalavel
 | 22.0 | Implementar orientação pós-launch, ativação e i18n final | FR-7.2, FR-7.3 | 16.0, 18.0 | Concluída |
 | 23.0 | Publicar escopo single-user e orientação de licença | FR-3.3, FR-3.4 | 1.0, 18.0 | Concluída |
 | 24.0 | Implementar cliente de telemetria opt-in | FR-8.1, FR-8.2 | 18.0 | Concluída |
-| 25.0 | Implementar endpoint mínimo de telemetria beta | FR-8.3, FR-8.4 | 24.0 | Pendente |
+| 25.0 | Implementar endpoint mínimo de telemetria beta | FR-8.3, FR-8.4 | 24.0 | Concluída |
 | 26.0 | Ajustar empacotamento, atribuições e CI de release | FR-1.1, FR-3.7 | 13.0, 16.0, 23.0 | Pendente |
 | 27.0 | Corrigir harness E2E e cobrir fluxo do wizard | FR-4.6 | 20.0, 21.0, 22.0, 26.0 | Pendente |
 | 28.0 | Cobrir E2E de launch, lifecycle e upgrade Office | FR-1.4, FR-7.7 | 16.0, 17.0, 26.0, 27.0 | Pendente |
@@ -81,7 +81,7 @@ feat/prd-winbox-office-instalavel
 - [x] 22.0 Implementar orientação pós-launch, ativação e i18n final
 - [x] 23.0 Publicar escopo single-user e orientação de licença
 - [x] 24.0 Implementar cliente de telemetria opt-in
-- [ ] 25.0 Implementar endpoint mínimo de telemetria beta
+- [x] 25.0 Implementar endpoint mínimo de telemetria beta
 - [ ] 26.0 Ajustar empacotamento, atribuições e CI de release
 - [ ] 27.0 Corrigir harness E2E e cobrir fluxo do wizard
 - [ ] 28.0 Cobrir E2E de launch, lifecycle e upgrade Office
