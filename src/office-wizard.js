@@ -56,6 +56,16 @@ const BYOL_DISCLAIMER_KEYS = [
   "officeWizard.byol.item.eula",
 ];
 
+const LICENSE_SCOPE_KEYS = [
+  "officeWizard.licenseInfo.scope",
+  "officeWizard.licenseInfo.noServer",
+  "officeWizard.licenseInfo.noEnforcement",
+  "officeWizard.licenseInfo.oem",
+  "officeWizard.licenseInfo.m365Business",
+  "officeWizard.licenseInfo.positive",
+  "officeWizard.licenseInfo.thirdPartyBoundary",
+];
+
 const MANAGED_SCOPE_KEYS = [
   ["manageProfileConfig", "officeWizard.adoption.scope.profileConfig"],
   ["manageWinAppsConf", "officeWizard.adoption.scope.winappsConf"],
@@ -629,6 +639,7 @@ export function renderByolStep(state, deps) {
     <ul class="office-wizard-disclaimer" aria-describedby="office-wizard-byol-desc">
       ${BYOL_DISCLAIMER_KEYS.map(key => `<li>${escapeHtml(t(key))}</li>`).join("")}
     </ul>
+    ${renderLicenseScopeStep(state, deps)}
     ${error}
     ${loading}
     <label class="office-wizard-check">
@@ -636,6 +647,29 @@ export function renderByolStep(state, deps) {
              aria-describedby="office-wizard-byol-desc" ${state.byolAccepted ? "checked" : ""} />
       <span>${escapeHtml(t("officeWizard.license.accept"))}</span>
     </label>`;
+}
+
+export function renderLicenseScopeStep(state, deps) {
+  const { t, escapeHtml, escapeAttr } = deps;
+  const href = safeGuideHref(deps.licenseAdrHref || "adrs/adr-agpl-winapps-runtime-boundary.md");
+  return `
+    <section class="office-wizard-warning-override" aria-label="${escapeAttr(t("officeWizard.licenseInfo.title"))}">
+      <strong>${escapeHtml(t("officeWizard.licenseInfo.title"))}</strong>
+      <ul class="office-wizard-disclaimer">
+        ${LICENSE_SCOPE_KEYS.map(key => `<li>${escapeHtml(t(key))}</li>`).join("")}
+      </ul>
+      <a class="office-wizard-action-hint" href="${escapeAttr(href)}" rel="noreferrer">
+        ${escapeHtml(t("officeWizard.licenseInfo.adrLink"))}
+      </a>
+    </section>`;
+}
+
+function safeGuideHref(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "#";
+  if (/^https:\/\/[^\s"'<>]+$/i.test(raw)) return raw;
+  if (/^(?:\.{0,2}\/)?[a-z0-9_./-]+$/i.test(raw)) return raw;
+  return "#";
 }
 
 function byolNotAcceptedState(state) {

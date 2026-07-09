@@ -13,6 +13,7 @@ import {
   renderActivationGuidance,
   renderAdoptionReview,
   renderByolStep,
+  renderLicenseScopeStep,
   renderOfficeWizard,
   renderPreflightStep,
   renderProvisioningStep,
@@ -52,6 +53,15 @@ const dict = {
   "officeWizard.byol.item.eula": "Provisioning may accept Microsoft terms through AcceptEULA and unattend.",
   "officeWizard.byol.error": "Accept BYOL before provisioning.",
   "officeWizard.byol.loading": "Recording acceptance.",
+  "officeWizard.licenseInfo.title": "Scope and license guidance",
+  "officeWizard.licenseInfo.scope": "This MVP is for one local user on the same physical machine.",
+  "officeWizard.licenseInfo.noServer": "It does not cover multi-user, server or third-party remote access.",
+  "officeWizard.licenseInfo.noEnforcement": "winbox does not validate plans, product keys, subscriptions or compliance.",
+  "officeWizard.licenseInfo.oem": "A host OEM Windows license generally does not cover an additional VM.",
+  "officeWizard.licenseInfo.m365Business": "Microsoft 365 Apps for Business is not supported for virtual desktop.",
+  "officeWizard.licenseInfo.positive": "Enterprise and Business Premium are supported virtual desktop plans.",
+  "officeWizard.licenseInfo.thirdPartyBoundary": "WinApps stays upstream at runtime and is not vendored.",
+  "officeWizard.licenseInfo.adrLink": "Runtime boundary ADR",
   "officeWizard.preflight.title": "Pre-flight",
   "officeWizard.preflight.desc": "Check host requirements before provisioning.",
   "officeWizard.preflight.duration": "Provisioning can take around 45 minutes.",
@@ -261,8 +271,51 @@ test("renderByolStep_shows_required_disclaimer_and_alert_states", () => {
   assert.match(html, /Generic install keys are not activation licenses/);
   assert.match(html, /Technical activation does not prove legal ownership/);
   assert.match(html, /AcceptEULA and unattend/);
+  assert.match(html, /Scope and license guidance/);
+  assert.match(html, /one local user on the same physical machine/);
   assert.match(html, /role="alert"/);
   assert.doesNotMatch(html, /<script/);
+});
+
+test("license_guidance_has_no_programmatic_enforcement_branch", () => {
+  const state = initialOfficeWizardState({
+    step: "license",
+    byolAccepted: true,
+    licensePlan: "m365_apps_for_business",
+    windowsLicense: "oem",
+  });
+  const html = renderLicenseScopeStep(state, deps);
+  const cta = officeWizardCta(state, deps);
+
+  assert.equal(canStartProvisioning(state), true);
+  assert.equal(cta.disabled, false);
+  assert.match(html, /does not validate plans, product keys, subscriptions or compliance/);
+  assert.match(html, /Apps for Business is not supported/);
+  assert.match(html, /OEM Windows license generally does not cover/);
+});
+
+test("single_user_scope_copy_is_localized", () => {
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+  const html = renderLicenseScopeStep(initialOfficeWizardState(), deps);
+
+  assert.match(html, /one local user on the same physical machine/);
+  assert.match(html, /multi-user, server or third-party remote access/);
+  assert.equal(en.includes("officeWizard.licenseInfo.scope"), true);
+  assert.equal(pt.includes("officeWizard.licenseInfo.scope"), true);
+  assert.equal(en.includes("officeWizard.licenseInfo.noServer"), true);
+  assert.equal(pt.includes("officeWizard.licenseInfo.noServer"), true);
+});
+
+test("license_guidance_escapes_dynamic_links", () => {
+  const html = renderLicenseScopeStep(initialOfficeWizardState(), {
+    ...deps,
+    licenseAdrHref: `javascript:alert(1)" onclick="alert(2)`,
+  });
+
+  assert.match(html, /href="#"/);
+  assert.doesNotMatch(html, /javascript:alert/);
+  assert.doesNotMatch(html, /onclick=/);
 });
 
 test("preflight_blocker_renders_action_hint_escaped", () => {
@@ -567,6 +620,12 @@ test("byol_disclaimer_i18n_parallel", () => {
     "officeWizard.byol.item.singleUser",
     "officeWizard.byol.item.eula",
     "officeWizard.byol.error",
+    "officeWizard.licenseInfo.scope",
+    "officeWizard.licenseInfo.noEnforcement",
+    "officeWizard.licenseInfo.oem",
+    "officeWizard.licenseInfo.m365Business",
+    "officeWizard.licenseInfo.positive",
+    "officeWizard.licenseInfo.thirdPartyBoundary",
   ];
 
   for (const key of required) {
