@@ -42,7 +42,7 @@ feat/prd-winbox-office-instalavel
 | 15.0 | Remover perfil Office com confirmação e sem destruição acidental | FR-6.5, FR-7.5 | 11.0, 12.0, 13.0, 14.0 | Concluída |
 | 16.0 | Implementar launcher Office, progresso GUI e validação de arquivos | FR-7.4, FR-7.7 | 10.0, 11.0, 12.0, 13.0 | Concluída |
 | 17.0 | Integrar ciclo de vida Office e aviso de apps abertos | FR-7.1, FR-7.6 | 10.0, 16.0 | Concluída |
-| 18.0 | Criar shell do wizard Office e entrada no app | FR-1.2, FR-4.1 | 10.0 | Pendente |
+| 18.0 | Criar shell do wizard Office e entrada no app | FR-1.2, FR-4.1 | 10.0 | Concluída |
 | 19.0 | Implementar aceite BYOL e bloqueios legais no wizard | FR-3.1, FR-3.2 | 18.0 | Pendente |
 | 20.0 | Implementar UI de preflight, warnings e adoção | FR-2.2, FR-6.4 | 4.0, 6.0, 14.0, 18.0 | Pendente |
 | 21.0 | Implementar UI de provisionamento, duração e progresso | FR-4.5, FR-4.6 | 10.0, 11.0, 18.0 | Pendente |
@@ -74,7 +74,7 @@ feat/prd-winbox-office-instalavel
 - [x] 15.0 Remover perfil Office com confirmação e sem destruição acidental
 - [x] 16.0 Implementar launcher Office, progresso GUI e validação de arquivos
 - [x] 17.0 Integrar ciclo de vida Office e aviso de apps abertos
-- [ ] 18.0 Criar shell do wizard Office e entrada no app
+- [x] 18.0 Criar shell do wizard Office e entrada no app
 - [ ] 19.0 Implementar aceite BYOL e bloqueios legais no wizard
 - [ ] 20.0 Implementar UI de preflight, warnings e adoção
 - [ ] 21.0 Implementar UI de provisionamento, duração e progresso

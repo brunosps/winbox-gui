@@ -8,6 +8,12 @@ import {
   primaryActionMeta as primaryActionMetaImpl,
   profileState,
 } from "./profile-display.js";
+import {
+  bindOfficeWizard,
+  initialOfficeWizardState,
+  officeWizardReducer,
+  renderOfficeWizard,
+} from "./office-wizard.js";
 import "./locales/en-US.js";
 import "./locales/pt-BR.js";
 
@@ -111,6 +117,9 @@ let latestHealth = null;
 let healthLoadedAt = 0;
 const HEALTH_TTL_MS = 30000;
 const operationEvents = [];
+let officeWizardOpen = false;
+let officeWizardState = initialOfficeWizardState();
+let unbindOfficeWizard = null;
 
 // Active launch operations indexed by profile name. Updated as
 // operation-progress events arrive so the card can show the current
@@ -553,7 +562,12 @@ function dashboardShell(profiles, health) {
   const selected = chooseSelectedProfile(visibleProfiles);
   const rows = visibleProfiles.length
     ? visibleProfiles.map(p => profileRowTemplate(p, profileName(p) === selectedProfileName)).join("")
-    : `<div class="table-empty">${profiles.length ? t("dashboard.noMatches") : t("empty.noProfiles")}</div>`;
+    : `<div class="table-empty">
+        <div>${profiles.length ? t("dashboard.noMatches") : t("empty.noProfiles")}</div>
+        <button type="button" class="btn btn-ghost btn-sm" data-office-wizard-open>
+          ${t("app.newProfile.office")}
+        </button>
+      </div>`;
   return `
     <section class="workspace">
       ${opsBarTemplate(profiles, health)}
@@ -566,6 +580,9 @@ function dashboardShell(profiles, health) {
               <h2>${t("dashboard.table.title")}</h2>
             </div>
             <div class="profile-controls">
+              <button type="button" class="btn btn-ghost btn-sm" data-office-wizard-open>
+                ${t("app.newProfile.office")}
+              </button>
               <label class="search-control" for="profile-search">
                 <span class="sr-only">${t("dashboard.search")}</span>
                 <input id="profile-search" class="field-input" type="search" value="${escapeAttr(profileQuery)}"
@@ -601,6 +618,41 @@ function dashboardShell(profiles, health) {
   `;
 }
 
+function renderOfficeWizardScreen() {
+  if (unbindOfficeWizard) unbindOfficeWizard();
+  main.innerHTML = renderOfficeWizard(officeWizardState, { t, escapeHtml, escapeAttr });
+  unbindOfficeWizard = bindOfficeWizard(main, {
+    dispatch(action) {
+      officeWizardState = officeWizardReducer(officeWizardState, action);
+      render();
+    },
+    onClose() {
+      officeWizardOpen = false;
+      render();
+    },
+    onStart() {
+      officeWizardState = officeWizardReducer(officeWizardState, {
+        type: "set_status",
+        status: "loading",
+      });
+      render();
+    },
+  });
+  applyI18n(main);
+}
+
+function closeOfficeWizardBinding() {
+  if (!unbindOfficeWizard) return;
+  unbindOfficeWizard();
+  unbindOfficeWizard = null;
+}
+
+function openOfficeWizard() {
+  officeWizardOpen = true;
+  officeWizardState = initialOfficeWizardState();
+  render();
+}
+
 // ─── Render dashboard ────────────────────────────────────────────────
 let rendering = false;
 
@@ -629,6 +681,11 @@ async function render(options = {}) {
   rendering = true;
   const focusSnapshot = captureMainFocus();
   try {
+    if (officeWizardOpen) {
+      renderOfficeWizardScreen();
+      return;
+    }
+    closeOfficeWizardBinding();
     const [profiles, health] = await Promise.all([
       invoke("list_profiles"),
       loadHostHealth({ force: Boolean(options.forceHealth) }),
@@ -665,6 +722,11 @@ document.addEventListener("click", (ev) => {
     const modal = ev.target.closest(".modal");
     if (modal) modal.classList.remove("open");
   }
+});
+
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest("[data-office-wizard-open]")) return;
+  openOfficeWizard();
 });
 
 function confirmDialog(title, message, yesLabel = "Confirmar") {

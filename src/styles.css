@@ -1071,6 +1071,220 @@ textarea.field-input {
   font-size: 14px;
 }
 
+/* Office wizard */
+.office-wizard {
+  display: grid;
+  gap: 16px;
+  min-height: calc(100dvh - 112px);
+}
+
+.office-wizard-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.office-wizard-header h2,
+.office-wizard-copy h3 {
+  margin: 0;
+  color: var(--title);
+  letter-spacing: 0;
+}
+
+.office-wizard-header p,
+.office-wizard-copy p,
+.office-wizard-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.office-wizard-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.office-wizard-steps,
+.office-wizard-panel {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.office-wizard-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.office-wizard-step:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.office-wizard-step[aria-current="step"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.office-wizard-step span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.office-wizard-step[data-status="done"] span {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.office-wizard-panel {
+  gap: 16px;
+}
+
+.office-wizard-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.office-wizard-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.office-wizard-summary div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.office-wizard-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.office-wizard-summary strong {
+  overflow-wrap: anywhere;
+}
+
+.office-wizard-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: var(--control-h);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.office-wizard-check input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.office-wizard-callout {
+  padding: 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--warn);
+  background: var(--warn-soft);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.office-wizard-phases {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.office-wizard-phases li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  font-size: 13px;
+}
+
+.office-wizard-phases li strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.office-wizard-phase-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--subtle);
+}
+
+.office-wizard-phases li[data-status="running"] .office-wizard-phase-dot {
+  background: var(--accent);
+}
+
+.office-wizard-phases li[data-status="done"] .office-wizard-phase-dot,
+.office-wizard-phases li[data-status="skipped"] .office-wizard-phase-dot {
+  background: var(--ok);
+}
+
+.office-wizard-phases li[data-status="failed"] .office-wizard-phase-dot {
+  background: var(--danger);
+}
+
+.office-wizard-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.office-wizard-action-main {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
 .toast {
   position: fixed;
   right: 16px;
@@ -1751,6 +1965,23 @@ pre {
   .iso-picker,
   .snapshot-create {
     grid-template-columns: 1fr;
+  }
+
+  .office-wizard-header,
+  .office-wizard-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .office-wizard-grid,
+  .office-wizard-fields,
+  .office-wizard-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .office-wizard-action-main,
+  .office-wizard-actions .btn {
+    width: 100%;
   }
 }
 
