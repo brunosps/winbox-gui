@@ -19,6 +19,7 @@ import {
   renderProvisioningStep,
   renderReadyStep,
   renderTelemetryPreference,
+  renderThirdPartyAttributions,
   stateFromProvisioningResponse,
 } from "./office-wizard.js";
 import {
@@ -63,6 +64,9 @@ const dict = {
   "officeWizard.licenseInfo.positive": "Enterprise and Business Premium are supported virtual desktop plans.",
   "officeWizard.licenseInfo.thirdPartyBoundary": "WinApps stays upstream at runtime and is not vendored.",
   "officeWizard.licenseInfo.adrLink": "Runtime boundary ADR",
+  "officeWizard.thirdParty.title": "Third-party notices",
+  "officeWizard.thirdParty.desc": "This flow uses dockurr/windows, WinApps, WinApps-Launcher, FreeRDP and ODT.",
+  "officeWizard.thirdParty.link": "Open THIRD-PARTY.md",
   "officeWizard.telemetry.title": "Share minimal provisioning telemetry",
   "officeWizard.telemetry.desc": "Optional and off by default. Sends phase and duration only.",
   "officeWizard.preflight.title": "Pre-flight",
@@ -321,6 +325,30 @@ test("license_guidance_escapes_dynamic_links", () => {
   assert.doesNotMatch(html, /onclick=/);
 });
 
+test("third_party_attribution_surface_is_localized", () => {
+  const html = renderThirdPartyAttributions({
+    ...deps,
+    thirdPartyHref: `javascript:alert(1)" onclick="alert(2)`,
+  });
+  const en = officeWizardKeys("src/locales/en-US.js");
+  const pt = officeWizardKeys("src/locales/pt-BR.js");
+  const notices = readFileSync("THIRD-PARTY.md", "utf8");
+
+  assert.match(html, /Third-party notices/);
+  assert.match(html, /dockurr\/windows, WinApps, WinApps-Launcher, FreeRDP/);
+  assert.match(html, /href="#"/);
+  assert.doesNotMatch(html, /javascript:alert/);
+  assert.equal(en.includes("officeWizard.thirdParty.title"), true);
+  assert.equal(pt.includes("officeWizard.thirdParty.title"), true);
+  assert.equal(en.includes("officeWizard.thirdParty.link"), true);
+  assert.equal(pt.includes("officeWizard.thirdParty.link"), true);
+  assert.match(notices, /dockurr\/windows \| MIT/);
+  assert.match(notices, /WinApps \| AGPL-3\.0/);
+  assert.match(notices, /WinApps-Launcher \| GPL-3\.0/);
+  assert.match(notices, /FreeRDP \| Apache-2\.0/);
+  assert.match(notices, /libfuse2t64/);
+});
+
 test("telemetry_preference_defaults_off_and_is_localized", () => {
   const state = initialOfficeWizardState();
   const html = renderTelemetryPreference(state, deps);
@@ -333,6 +361,24 @@ test("telemetry_preference_defaults_off_and_is_localized", () => {
   assert.match(html, /Optional and off by default/);
   assert.equal(en.includes("officeWizard.telemetry.title"), true);
   assert.equal(pt.includes("officeWizard.telemetry.title"), true);
+});
+
+test("tauri_bundle_targets_are_deb_and_appimage", () => {
+  const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+
+  assert.deepEqual(config.bundle.targets, ["deb", "appimage"]);
+  assert.equal(JSON.stringify(config.plugins || {}).includes("updater"), false);
+});
+
+test("release_workflow_generates_sha256sums", () => {
+  const workflow = readFileSync(".github/workflows/release-cli.yml", "utf8");
+
+  assert.match(workflow, /runs-on: ubuntu-22\.04/);
+  assert.match(workflow, /cargo tauri build --bundles deb,appimage/);
+  assert.match(workflow, /sha256sum "\$\{files\[@\]\}" > SHA256SUMS/);
+  assert.match(workflow, /src-tauri\/target\/release\/bundle\/deb\/\*\.deb/);
+  assert.match(workflow, /src-tauri\/target\/release\/bundle\/appimage\/\*\.AppImage/);
+  assert.doesNotMatch(workflow, /docker-ce|freerdp3-x11|flatpak install/i);
 });
 
 test("preflight_blocker_renders_action_hint_escaped", () => {

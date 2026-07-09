@@ -643,6 +643,7 @@ export function renderByolStep(state, deps) {
       ${BYOL_DISCLAIMER_KEYS.map(key => `<li>${escapeHtml(t(key))}</li>`).join("")}
     </ul>
     ${renderLicenseScopeStep(state, deps)}
+    ${renderThirdPartyAttributions(deps)}
     ${renderTelemetryPreference(state, deps)}
     ${error}
     ${loading}
@@ -677,6 +678,18 @@ export function renderLicenseScopeStep(state, deps) {
       </ul>
       <a class="office-wizard-action-hint" href="${escapeAttr(href)}" rel="noreferrer">
         ${escapeHtml(t("officeWizard.licenseInfo.adrLink"))}
+      </a>
+    </section>`;
+}
+
+export function renderThirdPartyAttributions({ t, escapeHtml, escapeAttr, thirdPartyHref }) {
+  const href = safeGuideHref(thirdPartyHref || "THIRD-PARTY.md");
+  return `
+    <section class="office-wizard-warning-override" aria-label="${escapeAttr(t("officeWizard.thirdParty.title"))}">
+      <strong>${escapeHtml(t("officeWizard.thirdParty.title"))}</strong>
+      <p>${escapeHtml(t("officeWizard.thirdParty.desc"))}</p>
+      <a class="office-wizard-action-hint" href="${escapeAttr(href)}" rel="noreferrer">
+        ${escapeHtml(t("officeWizard.thirdParty.link"))}
       </a>
     </section>`;
 }
