@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::{
-    docker::CliDocker,
+    docker::{CliDocker, DockerClient},
     env_file,
     flatpak::CliFlatpakClient,
     guest_executor::{
@@ -87,7 +87,7 @@ pub struct OfficeRetryPhaseArgs {
 pub struct ManagedScope {
     #[serde(default)]
     pub manage_profile_config: bool,
-    #[serde(default)]
+    #[serde(default, rename = "manageWinAppsConf", alias = "manageWinappsConf")]
     pub manage_winapps_conf: bool,
     #[serde(default)]
     pub manage_desktop_entries: bool,
@@ -95,8 +95,25 @@ pub struct ManagedScope {
     pub manage_file_associations: bool,
     #[serde(default)]
     pub manage_disk_lifecycle: bool,
-    #[serde(default)]
+    #[serde(
+        default,
+        rename = "preserveExistingWinAppsClone",
+        alias = "preserveExistingWinappsClone"
+    )]
     pub preserve_existing_winapps_clone: bool,
+}
+
+impl From<winapps::AdoptionManagedScope> for ManagedScope {
+    fn from(scope: winapps::AdoptionManagedScope) -> Self {
+        Self {
+            manage_profile_config: scope.manage_profile_config,
+            manage_winapps_conf: scope.manage_winapps_conf,
+            manage_desktop_entries: scope.manage_desktop_entries,
+            manage_file_associations: scope.manage_file_associations,
+            manage_disk_lifecycle: scope.manage_disk_lifecycle,
+            preserve_existing_winapps_clone: scope.preserve_existing_winapps_clone,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,13 +213,34 @@ pub struct OfficeOperationProgress {
 }
 
 pub fn preflight(args: OfficePreflightArgs) -> Result<OfficePreflightResult> {
-    office_preflight::run_preflight(
+    let result = office_preflight::run_preflight(
         args.name.as_deref(),
         &args.resources,
         &CliDocker,
         &CliFlatpakClient,
         &CliHostPreflight,
-    )
+    )?;
+    let profile = args.name.as_deref().unwrap_or("office");
+    let probe_paths = winapps::AdoptionProbePaths::for_profile(profile);
+    Ok(with_adoption_candidates(
+        result,
+        profile,
+        &CliDocker,
+        &probe_paths,
+    ))
+}
+
+fn with_adoption_candidates(
+    mut result: OfficePreflightResult,
+    profile: &str,
+    docker: &dyn DockerClient,
+    probe_paths: &winapps::AdoptionProbePaths,
+) -> OfficePreflightResult {
+    result.adoption_candidates = winapps::detect_adoption_findings(profile, docker, probe_paths)
+        .into_iter()
+        .filter_map(|finding| serde_json::to_value(finding).ok())
+        .collect();
+    result
 }
 
 pub fn preflight_contract(
@@ -321,6 +359,13 @@ pub fn retry_phase_contract(
 pub fn adopt_profile_contract(
     args: OfficeAdoptProfileArgs,
 ) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    adopt_profile_with_executor(args, &CliGuestExecutor)
+}
+
+fn adopt_profile_with_executor(
+    args: OfficeAdoptProfileArgs,
+    executor: &dyn GuestExecutor,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
     if !args.confirm {
         return Err(office_error(
             OfficeError::PROFILE_STATE_CONFLICT,
@@ -330,8 +375,27 @@ pub fn adopt_profile_contract(
         ));
     }
     let profile_dir = paths::profile_cfg_dir(&args.name);
+    adopt_profile_at(args, &profile_dir, executor)
+}
+
+fn adopt_profile_at(
+    args: OfficeAdoptProfileArgs,
+    profile_dir: &Path,
+    executor: &dyn GuestExecutor,
+) -> std::result::Result<OfficeStateResponse, OfficeError> {
+    guest_executor::probe_remoteapp_channel(&args.name, executor).map_err(|err| {
+        office_error(
+            OfficeError::GUEST_REMOTEAPP_NOT_PREPARED,
+            OfficePhase::RemoteappPrepare,
+            true,
+            serde_json::json!({
+                "detail": format!("{err:#}"),
+                "actionHint": REMOTEAPP_ACTION_HINT,
+            }),
+        )
+    })?;
     let mut state =
-        OfficeProvisioningState::load_or_default(&profile_dir, &args.name).map_err(|err| {
+        OfficeProvisioningState::load_or_default(profile_dir, &args.name).map_err(|err| {
             office_error(
                 OfficeError::PROFILE_STATE_CONFLICT,
                 OfficePhase::ProfileConfig,
@@ -339,15 +403,28 @@ pub fn adopt_profile_contract(
                 serde_json::json!({ "detail": format!("{err:#}") }),
             )
         })?;
+    mark_adoption_skipped_phases(&mut state, &args.managed_scope).map_err(|err| {
+        office_error(
+            OfficeError::PROFILE_STATE_CONFLICT,
+            OfficePhase::ProfileConfig,
+            true,
+            serde_json::json!({ "detail": format!("{err:#}") }),
+        )
+    })?;
     state.status = OfficeProfileStatus::Adopted;
+    state.managed_paths.winapps_conf_owned = args.managed_scope.manage_winapps_conf;
     state.adoption = Some(AdoptionState {
         found: vec![serde_json::json!({
-            "adoptionId": args.adoption_id,
+            "id": args.adoption_id,
+            "kind": "profile",
+            "status": "compatible",
+            "evidence": "Adoção confirmada pelo usuário após revisão e no-op RemoteApp bem-sucedido.",
+            "managedByDefault": args.managed_scope.manage_profile_config,
             "managedScope": args.managed_scope,
         })],
         user_confirmed_at: Some(chrono::Utc::now().to_rfc3339()),
     });
-    state.save_to_dir(&profile_dir).map_err(|err| {
+    state.save_to_dir(profile_dir).map_err(|err| {
         office_error(
             OfficeError::PROFILE_STATE_CONFLICT,
             OfficePhase::ProfileConfig,
@@ -356,6 +433,46 @@ pub fn adopt_profile_contract(
         )
     })?;
     Ok(state_response(&state))
+}
+
+fn mark_adoption_skipped_phases(
+    state: &mut OfficeProvisioningState,
+    scope: &ManagedScope,
+) -> Result<()> {
+    for phase in adoption_skipped_phases(scope) {
+        state.mark_phase_skipped(
+            phase,
+            Some(PhaseEvidence {
+                registry: Some(serde_json::json!({
+                    "adoption": true,
+                    "managedScope": scope,
+                })),
+                ..PhaseEvidence::default()
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+fn adoption_skipped_phases(scope: &ManagedScope) -> Vec<OfficePhase> {
+    let mut phases = vec![
+        OfficePhase::Preflight,
+        OfficePhase::ByolAcceptance,
+        OfficePhase::ProfileConfig,
+        OfficePhase::WindowsPrepare,
+        OfficePhase::WindowsInstall,
+        OfficePhase::RemoteappPrepare,
+    ];
+    if !scope.manage_winapps_conf || scope.preserve_existing_winapps_clone {
+        phases.push(OfficePhase::WinappsConfig);
+    }
+    if !scope.manage_desktop_entries {
+        phases.push(OfficePhase::DesktopRegistration);
+    }
+    if !scope.manage_file_associations {
+        phases.push(OfficePhase::FileAssociation);
+    }
+    phases
 }
 
 pub fn launch_app_contract(
@@ -1270,6 +1387,7 @@ fn fail_office_host_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::docker::mock::MockDocker;
     use crate::core::guest_executor::mock::MockGuestExecutor;
     use crate::core::guest_executor::{GuestMarker, GuestMarkerStatus};
     use crate::core::office_odt::mock::MockOdtHost;
@@ -1330,6 +1448,48 @@ mod tests {
     }
 
     #[test]
+    fn office_preflight_returns_adoption_candidates() {
+        let root = temp_dir("preflight-adoption");
+        let profile_env = root.join("profile").join("config.env");
+        std::fs::create_dir_all(profile_env.parent().expect("profile parent should exist"))
+            .expect("profile parent should be created");
+        std::fs::write(&profile_env, "PROFILE_KIND=office\nRDP_PORT=3391\n")
+            .expect("profile env should be written");
+        let probe_paths = winapps::AdoptionProbePaths {
+            winapps_conf_path: root.join("missing-winapps.conf"),
+            winapps_clone_dir: root.join("missing-winapps-src"),
+            applications_dir: root.join("missing-applications"),
+            profile_env_file: profile_env,
+        };
+        let docker = MockDocker::new();
+        docker.seed_status("winbox-windows", "running");
+        let result = OfficePreflightResult {
+            checks: Vec::new(),
+            warnings: 0,
+            blockers: 0,
+            adoption_candidates: Vec::new(),
+        };
+
+        let result = with_adoption_candidates(result, "office", &docker, &probe_paths);
+
+        assert_eq!(result.adoption_candidates.len(), 2);
+        assert!(result
+            .adoption_candidates
+            .iter()
+            .any(|candidate| candidate["kind"] == "container"
+                && candidate["id"] == "container:winbox-windows"
+                && candidate["managedByDefault"] == false));
+        assert!(
+            result
+                .adoption_candidates
+                .iter()
+                .any(|candidate| candidate["kind"] == "rdp_port"
+                    && candidate["id"] == "rdp_port:3391")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn operation_progress_office_error_status_shape() {
         let payload = office_progress_payload(
             "office",
@@ -1381,6 +1541,63 @@ mod tests {
         assert!(oem_dir
             .join(guest_executor::REMOTEAPP_PREPARE_SCRIPT)
             .is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn adoption_requires_remoteapp_noop_success() {
+        let root = temp_dir("adoption-review");
+        let profile_dir = root.join("profile");
+        let args = OfficeAdoptProfileArgs {
+            name: "office".to_string(),
+            adoption_id: "manual-existing".to_string(),
+            managed_scope: manual_user_assets_scope(),
+            confirm: true,
+        };
+        let failing_executor = MockGuestExecutor::new();
+        failing_executor.fail_next_run("RemoteApp /app não preparado");
+
+        let err = adopt_profile_at(args.clone(), &profile_dir, &failing_executor)
+            .expect_err("adoption must require a RemoteApp no-op");
+
+        assert_eq!(err.code(), OfficeError::GUEST_REMOTEAPP_NOT_PREPARED);
+        assert_eq!(err.fields().phase, OfficePhase::RemoteappPrepare);
+        assert_eq!(failing_executor.runs().len(), 1);
+        assert!(!crate::core::office_state::state_path(&profile_dir).exists());
+
+        let executor = MockGuestExecutor::new();
+        let response =
+            adopt_profile_at(args, &profile_dir, &executor).expect("adoption should be persisted");
+        let state = OfficeProvisioningState::load_or_default(&profile_dir, "office")
+            .expect("adopted state should load");
+
+        assert_eq!(executor.runs().len(), 1);
+        assert!(executor.detached_runs().is_empty());
+        assert_eq!(response.status, OfficeProfileStatus::Adopted);
+        assert_eq!(
+            response.phases[&OfficePhase::RemoteappPrepare].status,
+            PhaseStatus::Skipped
+        );
+        assert_eq!(
+            response.phases[&OfficePhase::WinappsConfig].status,
+            PhaseStatus::Skipped
+        );
+        assert_eq!(
+            response.phases[&OfficePhase::DesktopRegistration].status,
+            PhaseStatus::Skipped
+        );
+        assert_eq!(
+            response.phases[&OfficePhase::FileAssociation].status,
+            PhaseStatus::Skipped
+        );
+        assert!(!state.managed_paths.winapps_conf_owned);
+        let adoption = state.adoption.expect("adoption review should be stored");
+        assert_eq!(adoption.found.len(), 1);
+        assert_eq!(adoption.found[0]["id"], "manual-existing");
+        assert_eq!(
+            adoption.found[0]["managedScope"]["manageWinAppsConf"],
+            false
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1615,6 +1832,17 @@ mod tests {
                 }),
             }),
             updated_at: Some("2026-07-08T00:00:00Z".to_string()),
+        }
+    }
+
+    fn manual_user_assets_scope() -> ManagedScope {
+        ManagedScope {
+            manage_profile_config: false,
+            manage_winapps_conf: false,
+            manage_desktop_entries: false,
+            manage_file_associations: false,
+            manage_disk_lifecycle: false,
+            preserve_existing_winapps_clone: true,
         }
     }
 }

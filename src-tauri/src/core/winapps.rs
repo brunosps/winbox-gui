@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{
-    env_file, flatpak::FREERDP_FLATPAK_COMMAND, launch_error::OfficeError,
+    docker::DockerClient, env_file, flatpak::FREERDP_FLATPAK_COMMAND, launch_error::OfficeError,
     office_state::OfficePhase, paths,
 };
 
@@ -231,6 +231,69 @@ pub struct FinalVerifyReport {
     pub mime_types: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdoptionFindingKind {
+    Container,
+    Profile,
+    WinappsConf,
+    WinappsClone,
+    DesktopEntry,
+    RdpPort,
+    OfficeInstall,
+    OdtAsset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdoptionFindingStatus {
+    Compatible,
+    Partial,
+    Unsafe,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptionFinding {
+    pub id: String,
+    pub kind: AdoptionFindingKind,
+    pub status: AdoptionFindingStatus,
+    pub evidence: String,
+    pub managed_by_default: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptionManagedScope {
+    pub manage_profile_config: bool,
+    #[serde(rename = "manageWinAppsConf")]
+    pub manage_winapps_conf: bool,
+    pub manage_desktop_entries: bool,
+    pub manage_file_associations: bool,
+    pub manage_disk_lifecycle: bool,
+    #[serde(rename = "preserveExistingWinAppsClone")]
+    pub preserve_existing_winapps_clone: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptionProbePaths {
+    pub winapps_conf_path: PathBuf,
+    pub winapps_clone_dir: PathBuf,
+    pub applications_dir: PathBuf,
+    pub profile_env_file: PathBuf,
+}
+
+impl AdoptionProbePaths {
+    pub fn for_profile(profile: &str) -> Self {
+        Self {
+            winapps_conf_path: winapps_conf_path(),
+            winapps_clone_dir: managed_source_dir(),
+            applications_dir: desktop_applications_dir(),
+            profile_env_file: paths::profile_env_file(profile),
+        }
+    }
+}
+
 pub fn managed_source_dir() -> PathBuf {
     paths::data_dir().join("winapps")
 }
@@ -254,6 +317,58 @@ pub fn mimeapps_path() -> PathBuf {
             .map(PathBuf::from)
             .unwrap_or_else(|| paths::home().join(".config"))
             .join("mimeapps.list")
+    }
+}
+
+pub fn detect_adoption_findings(
+    profile: &str,
+    docker: &dyn DockerClient,
+    probe_paths: &AdoptionProbePaths,
+) -> Vec<AdoptionFinding> {
+    let mut findings = Vec::new();
+    findings.extend(detect_container_findings(profile, docker));
+    if probe_paths.winapps_conf_path.is_file() {
+        findings.push(AdoptionFinding {
+            id: "winapps_conf".to_string(),
+            kind: AdoptionFindingKind::WinappsConf,
+            status: AdoptionFindingStatus::Compatible,
+            evidence: probe_paths.winapps_conf_path.display().to_string(),
+            managed_by_default: false,
+        });
+    }
+    if probe_paths.winapps_clone_dir.is_dir() {
+        findings.push(AdoptionFinding {
+            id: "winapps_clone".to_string(),
+            kind: AdoptionFindingKind::WinappsClone,
+            status: AdoptionFindingStatus::Compatible,
+            evidence: probe_paths.winapps_clone_dir.display().to_string(),
+            managed_by_default: false,
+        });
+    }
+    if let Some(finding) = detect_desktop_entry_finding(&probe_paths.applications_dir) {
+        findings.push(finding);
+    }
+    if let Some(finding) = detect_rdp_port_finding(&probe_paths.profile_env_file) {
+        findings.push(finding);
+    }
+    findings
+}
+
+pub fn classify_adoption_managed_scope(findings: &[AdoptionFinding]) -> AdoptionManagedScope {
+    let has_container = has_finding(findings, AdoptionFindingKind::Container);
+    let has_profile = has_finding(findings, AdoptionFindingKind::RdpPort)
+        || has_finding(findings, AdoptionFindingKind::Profile);
+    let has_winapps_conf = has_finding(findings, AdoptionFindingKind::WinappsConf);
+    let has_clone = has_finding(findings, AdoptionFindingKind::WinappsClone);
+    let has_desktop = has_finding(findings, AdoptionFindingKind::DesktopEntry);
+
+    AdoptionManagedScope {
+        manage_profile_config: !has_profile,
+        manage_winapps_conf: !has_winapps_conf,
+        manage_desktop_entries: !has_desktop,
+        manage_file_associations: !has_desktop,
+        manage_disk_lifecycle: !has_container,
+        preserve_existing_winapps_clone: has_clone,
     }
 }
 
@@ -980,6 +1095,79 @@ fn file_association_error(phase: OfficePhase, detail: String) -> OfficeError {
     )
 }
 
+fn detect_container_findings(profile: &str, docker: &dyn DockerClient) -> Vec<AdoptionFinding> {
+    let candidates = ["winbox-windows".to_string(), format!("winbox-{profile}")];
+    candidates
+        .into_iter()
+        .filter_map(|container| {
+            let status = docker.container_status(&container);
+            if status == "absent" {
+                return None;
+            }
+            Some(AdoptionFinding {
+                id: format!("container:{container}"),
+                kind: AdoptionFindingKind::Container,
+                status: adoption_status_from_container(&status),
+                evidence: format!("{container} status={status}"),
+                managed_by_default: false,
+            })
+        })
+        .collect()
+}
+
+fn detect_desktop_entry_finding(applications_dir: &Path) -> Option<AdoptionFinding> {
+    let found = OFFICE_LAUNCHERS
+        .iter()
+        .filter(|launcher| {
+            applications_dir
+                .join(format!("{launcher}.desktop"))
+                .is_file()
+        })
+        .map(|launcher| (*launcher).to_string())
+        .collect::<Vec<_>>();
+    if found.is_empty() {
+        return None;
+    }
+    let status = if found.len() == OFFICE_LAUNCHERS.len() {
+        AdoptionFindingStatus::Compatible
+    } else {
+        AdoptionFindingStatus::Partial
+    };
+    Some(AdoptionFinding {
+        id: "desktop_entries:office".to_string(),
+        kind: AdoptionFindingKind::DesktopEntry,
+        status,
+        evidence: format!("{} em {}", found.join(","), applications_dir.display()),
+        managed_by_default: false,
+    })
+}
+
+fn detect_rdp_port_finding(profile_env_file: &Path) -> Option<AdoptionFinding> {
+    let env = env_file::read(profile_env_file).ok()?;
+    let rdp_port = env_file::get_u16(&env, "RDP_PORT");
+    if rdp_port == 0 {
+        return None;
+    }
+    Some(AdoptionFinding {
+        id: format!("rdp_port:{rdp_port}"),
+        kind: AdoptionFindingKind::RdpPort,
+        status: AdoptionFindingStatus::Compatible,
+        evidence: format!("{} publica RDP_PORT={rdp_port}", profile_env_file.display()),
+        managed_by_default: true,
+    })
+}
+
+fn adoption_status_from_container(status: &str) -> AdoptionFindingStatus {
+    match status {
+        "running" | "exited" | "paused" | "created" => AdoptionFindingStatus::Compatible,
+        _ => AdoptionFindingStatus::Partial,
+    }
+}
+
+fn has_finding(findings: &[AdoptionFinding], kind: AdoptionFindingKind) -> bool {
+    findings.iter().any(|finding| finding.kind == kind)
+}
+
 fn write_winapps_conf(path: &Path, config: &WinAppsConfig) -> Result<()> {
     let content = render_winapps_conf(config)?;
     if let Some(parent) = path.parent() {
@@ -1136,8 +1324,10 @@ pub mod mock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::docker::mock::MockDocker;
     use crate::core::office_state::{OfficeProvisioningState, PhaseEvidence};
     use mock::MockWinAppsClient;
+    use std::collections::BTreeSet;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1305,6 +1495,106 @@ mod tests {
             .expect_err("missing WinApps launchers should block final verify");
         assert_eq!(err.code(), OfficeError::APP_NOT_REGISTERED);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn adoption_detects_all_required_signals() {
+        let root = temp_dir("adoption-signals");
+        let applications_dir = root.join("applications");
+        let winapps_conf = root.join("config").join("winapps.conf");
+        let clone_dir = root.join("winapps-src");
+        let profile_env = root.join("profile").join("config.env");
+        std::fs::create_dir_all(winapps_conf.parent().expect("conf parent should exist"))
+            .expect("conf parent should be created");
+        std::fs::write(&winapps_conf, "RDP_PORT='3391'\n").expect("conf should be written");
+        std::fs::create_dir_all(&clone_dir).expect("clone dir should exist");
+        std::fs::create_dir_all(&applications_dir).expect("applications dir should exist");
+        seed_office_desktops(&applications_dir);
+        std::fs::create_dir_all(profile_env.parent().expect("profile parent should exist"))
+            .expect("profile parent should be created");
+        std::fs::write(&profile_env, "PROFILE_KIND=office\nRDP_PORT=3391\n")
+            .expect("profile env should be written");
+        let paths = AdoptionProbePaths {
+            winapps_conf_path: winapps_conf,
+            winapps_clone_dir: clone_dir,
+            applications_dir,
+            profile_env_file: profile_env,
+        };
+        let docker = MockDocker::new();
+        docker.seed_status("winbox-windows", "running");
+
+        let findings = detect_adoption_findings("office", &docker, &paths);
+        let kinds = findings
+            .iter()
+            .map(|finding| finding.kind)
+            .collect::<BTreeSet<_>>();
+
+        assert!(kinds.contains(&AdoptionFindingKind::Container));
+        assert!(kinds.contains(&AdoptionFindingKind::WinappsConf));
+        assert!(kinds.contains(&AdoptionFindingKind::WinappsClone));
+        assert!(kinds.contains(&AdoptionFindingKind::DesktopEntry));
+        assert!(kinds.contains(&AdoptionFindingKind::RdpPort));
+        assert!(findings.iter().any(|finding| finding.id == "rdp_port:3391"));
+
+        let empty_paths = AdoptionProbePaths {
+            winapps_conf_path: root.join("missing.conf"),
+            winapps_clone_dir: root.join("missing-clone"),
+            applications_dir: root.join("missing-applications"),
+            profile_env_file: root.join("missing.env"),
+        };
+        let empty = detect_adoption_findings("empty", &MockDocker::new(), &empty_paths);
+        assert!(empty.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_scope_prevents_overwriting_user_assets() {
+        let findings = vec![
+            AdoptionFinding {
+                id: "winapps_conf".to_string(),
+                kind: AdoptionFindingKind::WinappsConf,
+                status: AdoptionFindingStatus::Compatible,
+                evidence: "~/.config/winapps/winapps.conf".to_string(),
+                managed_by_default: false,
+            },
+            AdoptionFinding {
+                id: "winapps_clone".to_string(),
+                kind: AdoptionFindingKind::WinappsClone,
+                status: AdoptionFindingStatus::Compatible,
+                evidence: "~/.local/bin/winapps-src".to_string(),
+                managed_by_default: false,
+            },
+            AdoptionFinding {
+                id: "desktop_entries:office".to_string(),
+                kind: AdoptionFindingKind::DesktopEntry,
+                status: AdoptionFindingStatus::Compatible,
+                evidence: "excel-o365,word-o365,powerpoint-o365".to_string(),
+                managed_by_default: false,
+            },
+            AdoptionFinding {
+                id: "container:winbox-windows".to_string(),
+                kind: AdoptionFindingKind::Container,
+                status: AdoptionFindingStatus::Compatible,
+                evidence: "winbox-windows status=running".to_string(),
+                managed_by_default: false,
+            },
+        ];
+
+        let scope = classify_adoption_managed_scope(&findings);
+
+        assert!(!scope.manage_winapps_conf);
+        assert!(!scope.manage_desktop_entries);
+        assert!(!scope.manage_file_associations);
+        assert!(!scope.manage_disk_lifecycle);
+        assert!(scope.preserve_existing_winapps_clone);
+
+        let empty_scope = classify_adoption_managed_scope(&[]);
+        assert!(empty_scope.manage_profile_config);
+        assert!(empty_scope.manage_winapps_conf);
+        assert!(empty_scope.manage_desktop_entries);
+        assert!(empty_scope.manage_file_associations);
+        assert!(empty_scope.manage_disk_lifecycle);
+        assert!(!empty_scope.preserve_existing_winapps_clone);
     }
 
     fn sample_config(user: &str, pass: &str) -> WinAppsConfig {
