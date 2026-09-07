@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'git %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+PIN="${WINBOX_E2E_WINAPPS_PIN:-5cbf7381f9a12af630e5a289d6dab5f7adc70e5d}"
+
+if [ "${1:-}" = "clone" ]; then
+  target="${@: -1}"
+  mkdir -p "$target/.git"
+  echo "$PIN" > "$target/.git/HEAD.mock"
+  exit 0
+fi
+
+if [ "${1:-}" = "-C" ]; then
+  case "${3:-}" in
+    rev-parse)
+      echo "$PIN"
+      ;;
+    fetch|checkout|pull)
+      :
+      ;;
+    *)
+      echo "mock git -C ${2:-} ${*:3}"
+      ;;
+  esac
+  exit 0
+fi
+
+echo "mock git $*"
+exit 0

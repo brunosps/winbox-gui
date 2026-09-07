@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   rust:
-    name: Rust (cargo fmt + clippy + test)
+    name: Rust (cargo fmt + clippy + test + coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -52,8 +52,44 @@ jobs:
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: cargo llvm-cov Office modules
+        run: |
+          cargo llvm-cov --manifest-path src-tauri/Cargo.toml --all-targets --json --summary-only --output-path src-tauri/target/llvm-cov-office-summary.json
+          node <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("src-tauri/target/llvm-cov-office-summary.json", "utf8"));
+          const files = report.data?.[0]?.files ?? report.files ?? [];
+          const targets = [
+            "src-tauri/src/core/office_state.rs",
+            "src-tauri/src/core/office_odt.rs",
+            "src-tauri/src/core/office_preflight.rs",
+            "src-tauri/src/commands/office.rs",
+          ];
+          const rows = files.filter(file => targets.some(target => file.filename.endsWith(target)));
+          if (rows.length !== targets.length) {
+            console.error("Missing Office coverage rows", {
+              expected: targets,
+              found: rows.map(file => file.filename),
+            });
+            process.exit(1);
+          }
+          let covered = 0;
+          let count = 0;
+          for (const file of rows) {
+            const lines = file.summary?.lines ?? {};
+            covered += Number(lines.covered ?? 0);
+            count += Number(lines.count ?? 0);
+            const percent = Number(lines.percent ?? 0).toFixed(2);
+            console.log(`${file.filename}: ${percent}% line coverage`);
+          }
+          console.log(`Office core/commands aggregate: ${count ? ((covered / count) * 100).toFixed(2) : "0.00"}% line coverage`);
+          NODE
+
   js:
-    name: JS (check + test)
+    name: JS (check + test + coverage)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -71,3 +107,6 @@ jobs:
 
       - name: npm run test:js
         run: npm run test:js
+
+      - name: node:test coverage (office wizard)
+        run: node --test --experimental-test-coverage src/office-wizard.test.js

@@ -11,6 +11,7 @@ pub const HOST: &str = "127.0.0.1";
 pub const BASE_WEB_PORT: u16 = 8006;
 pub const BASE_RDP_PORT: u16 = 3389;
 pub const BASE_SSH_PORT: u16 = 2222;
+pub const TELEMETRY_ENDPOINT_URL: &str = "https://telemetry.example.invalid/events";
 
 /// User home dir. Unix: `$HOME`. Windows: `%USERPROFILE%`.
 pub fn home() -> PathBuf {

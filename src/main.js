@@ -8,6 +8,19 @@ import {
   primaryActionMeta as primaryActionMetaImpl,
   profileState,
 } from "./profile-display.js";
+import {
+  applyOfficeProgressEvent,
+  bindOfficeWizard,
+  initialOfficeWizardState,
+  officeWizardReducer,
+  renderOfficeWizard,
+  stateFromProvisioningResponse,
+} from "./office-wizard.js";
+import {
+  initialOfficeProgressWindowState,
+  officeProgressWindowReducer,
+  renderOfficeProgressWindow,
+} from "./office-progress-window.js";
 import "./locales/en-US.js";
 import "./locales/pt-BR.js";
 
@@ -111,6 +124,14 @@ let latestHealth = null;
 let healthLoadedAt = 0;
 const HEALTH_TTL_MS = 30000;
 const operationEvents = [];
+let officeWizardOpen = false;
+let officeWizardState = initialOfficeWizardState();
+let unbindOfficeWizard = null;
+const officeProgressWindowArgs = detectOfficeProgressWindowArgs();
+let officeProgressWindowState = initialOfficeProgressWindowState({
+  profileName: officeProgressWindowArgs?.profileName || "office",
+  appId: officeProgressWindowArgs?.appId || "",
+});
 
 // Active launch operations indexed by profile name. Updated as
 // operation-progress events arrive so the card can show the current
@@ -122,6 +143,17 @@ if (tauriEvent && tauriEvent.listen) {
   tauriEvent.listen("operation-progress", (ev) => {
     const payload = ev.payload || {};
     addOperationEvent(payload);
+    if (officeProgressWindowArgs) {
+      officeProgressWindowState = officeProgressWindowReducer(officeProgressWindowState, {
+        type: "operation_progress",
+        event: payload,
+      });
+      renderOfficeProgressWindowScreen();
+    }
+    if (officeWizardOpen) {
+      officeWizardState = applyOfficeProgressEvent(officeWizardState, payload);
+      renderOfficeWizardScreen();
+    }
     renderOperationPanel();
     const status = String(payload.status || "");
     const profile = String(payload.profile || "");
@@ -138,6 +170,24 @@ if (tauriEvent && tauriEvent.listen) {
     }
     renderProfileCardInline(profile);
   });
+}
+
+function detectOfficeProgressWindowArgs() {
+  const injected = window.__WINBOX_OFFICE_PROGRESS__;
+  if (injected && typeof injected === "object") {
+    return {
+      profileName: String(injected.profileName || injected.profile || "office"),
+      appId: String(injected.appId || injected.app || ""),
+    };
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("window") !== "office-progress" && window.location.hash !== "#office-progress") {
+    return null;
+  }
+  return {
+    profileName: params.get("profile") || "office",
+    appId: params.get("app") || "",
+  };
 }
 
 // Update only the running-state region of a single card without
@@ -553,7 +603,12 @@ function dashboardShell(profiles, health) {
   const selected = chooseSelectedProfile(visibleProfiles);
   const rows = visibleProfiles.length
     ? visibleProfiles.map(p => profileRowTemplate(p, profileName(p) === selectedProfileName)).join("")
-    : `<div class="table-empty">${profiles.length ? t("dashboard.noMatches") : t("empty.noProfiles")}</div>`;
+    : `<div class="table-empty">
+        <div>${profiles.length ? t("dashboard.noMatches") : t("empty.noProfiles")}</div>
+        <button type="button" class="btn btn-ghost btn-sm" data-office-wizard-open>
+          ${t("app.newProfile.office")}
+        </button>
+      </div>`;
   return `
     <section class="workspace">
       ${opsBarTemplate(profiles, health)}
@@ -566,6 +621,9 @@ function dashboardShell(profiles, health) {
               <h2>${t("dashboard.table.title")}</h2>
             </div>
             <div class="profile-controls">
+              <button type="button" class="btn btn-ghost btn-sm" data-office-wizard-open>
+                ${t("app.newProfile.office")}
+              </button>
               <label class="search-control" for="profile-search">
                 <span class="sr-only">${t("dashboard.search")}</span>
                 <input id="profile-search" class="field-input" type="search" value="${escapeAttr(profileQuery)}"
@@ -601,6 +659,106 @@ function dashboardShell(profiles, health) {
   `;
 }
 
+function renderOfficeWizardScreen() {
+  if (unbindOfficeWizard) unbindOfficeWizard();
+  main.innerHTML = renderOfficeWizard(officeWizardState, { t, escapeHtml, escapeAttr });
+  unbindOfficeWizard = bindOfficeWizard(main, {
+    getState() {
+      return officeWizardState;
+    },
+    dispatch(action) {
+      officeWizardState = officeWizardReducer(officeWizardState, action);
+      render();
+    },
+    onClose() {
+      officeWizardOpen = false;
+      render();
+    },
+    onStart() {
+      startOfficeProvisioning();
+    },
+  });
+  applyI18n(main);
+}
+
+function renderOfficeProgressWindowScreen() {
+  if (!officeProgressWindowArgs) return;
+  document.body.dataset.window = "office-progress";
+  closeOfficeWizardBinding();
+  main.innerHTML = renderOfficeProgressWindow(officeProgressWindowState, { t, escapeHtml, escapeAttr });
+  applyI18n(main);
+}
+
+function closeOfficeWizardBinding() {
+  if (!unbindOfficeWizard) return;
+  unbindOfficeWizard();
+  unbindOfficeWizard = null;
+}
+
+function openOfficeWizard() {
+  officeWizardOpen = true;
+  officeWizardState = initialOfficeWizardState();
+  render();
+  resumeOfficeWizardState(officeWizardState.profileName);
+}
+
+function officeProvisioningArgs(state) {
+  return {
+    name: String(state.profileName || "office").trim(),
+    productId: state.productId || "O365ProPlusRetail",
+    language: state.language || "pt-br",
+    byolAccepted: Boolean(state.byolAccepted),
+    resources: {
+      ramGb: 8,
+      cpuCores: 4,
+      diskGb: 128,
+      warningOverride: Boolean(state.warningOverride),
+    },
+  };
+}
+
+async function startOfficeProvisioning() {
+  officeWizardState = officeWizardReducer(officeWizardState, {
+    type: "set_status",
+    status: "loading",
+  });
+  officeWizardState = officeWizardReducer(officeWizardState, { type: "set_step", step: "provisioning" });
+  render();
+  try {
+    const response = await invoke("office_start_provisioning", {
+      args: officeProvisioningArgs(officeWizardState),
+    });
+    officeWizardState = stateFromProvisioningResponse(officeWizardState, response);
+    render();
+  } catch (err) {
+    const code = typeof err === "object" && err ? String(err.code || "office_start_failed") : "office_start_failed";
+    officeWizardState = {
+      ...officeWizardState,
+      step: "provisioning",
+      status: "error",
+      errorCode: code,
+      lastError: {
+        code,
+        message: formatErrorForToast(err),
+        phase: err?.phase || "preflight",
+        retryable: Boolean(err?.retryable),
+      },
+    };
+    showErrorToast(err);
+    render();
+  }
+}
+
+async function resumeOfficeWizardState(profileName) {
+  try {
+    const response = await invoke("office_get_state", { args: { name: profileName } });
+    officeWizardState = stateFromProvisioningResponse(officeWizardState, response);
+    render();
+  } catch {
+    // Perfil novo ainda não tem estado persistido; o wizard continua em rascunho.
+  }
+}
+
 // ─── Render dashboard ────────────────────────────────────────────────
 let rendering = false;
 
@@ -629,6 +787,15 @@ async function render(options = {}) {
   rendering = true;
   const focusSnapshot = captureMainFocus();
   try {
+    if (officeProgressWindowArgs) {
+      renderOfficeProgressWindowScreen();
+      return;
+    }
+    if (officeWizardOpen) {
+      renderOfficeWizardScreen();
+      return;
+    }
+    closeOfficeWizardBinding();
     const [profiles, health] = await Promise.all([
       invoke("list_profiles"),
       loadHostHealth({ force: Boolean(options.forceHealth) }),
@@ -665,6 +832,11 @@ document.addEventListener("click", (ev) => {
     const modal = ev.target.closest(".modal");
     if (modal) modal.classList.remove("open");
   }
+});
+
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest("[data-office-wizard-open]")) return;
+  openOfficeWizard();
 });
 
 function confirmDialog(title, message, yesLabel = "Confirmar") {

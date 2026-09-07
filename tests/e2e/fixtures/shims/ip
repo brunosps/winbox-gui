@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'ip %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+if [ "${1:-}" = "route" ]; then
+  cat <<'EOF'
+default via 192.168.15.1 dev eth0 proto dhcp metric 100
+192.168.15.0/24 dev eth0 proto kernel scope link src 192.168.15.44 metric 100
+EOF
+  exit 0
+fi
+
+exit 0

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'ss %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+if [ "${WINBOX_E2E_RDP_SESSION:-inactive}" = "error" ]; then
+  echo "mock ss forced failure" >&2
+  exit 2
+fi
+
+if [ "${WINBOX_E2E_RDP_SESSION:-inactive}" = "active" ]; then
+  port="${WINBOX_E2E_RDP_PORT:-13389}"
+  echo "ESTAB 0 0 127.0.0.1:52144 127.0.0.1:${port} users:((\"xfreerdp\",pid=4242,fd=12))"
+  exit 0
+fi
+
+exit 0

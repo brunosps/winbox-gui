@@ -2,7 +2,9 @@ use anyhow::{bail, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::path::PathBuf;
 
-use crate::core::{bundles, env_file, paths, profile, validation};
+use crate::core::{
+    bundles, env_file, office_state::OfficeProvisioningState, paths, profile, validation,
+};
 
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/templates");
 
@@ -23,6 +25,19 @@ pub fn run(profile_name: &str) -> Result<PathBuf> {
 
     let env_path = paths::profile_env_file(profile_name);
     let map = env_file::read(&env_path)?;
+    let config = validation::office_env_config_from_map(&map);
+    let state = OfficeProvisioningState::load_or_default(
+        &paths::profile_cfg_dir(profile_name),
+        profile_name,
+    )?;
+    // Reapply only regenerates PowerShell from the BUNDLES list; it never
+    // edits config.env, so there is no VERSION/LANGUAGE/OFFICE_LANGUAGE
+    // candidate update to pass to the immutable-field guard.
+    validation::guard_office_immutable_fields(
+        &config,
+        validation::OfficeImmutableUpdate::default(),
+        Some(&state),
+    )?;
     let bundles_csv = env_file::get(&map, "BUNDLES").to_string();
 
     let shared_dir = std::path::PathBuf::from(env_file::get(&map, "SHARED_DIR"));

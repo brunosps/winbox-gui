@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::{paths, validation};
+use super::{env_file, paths, validation};
 
 pub fn list_names() -> Vec<String> {
     let dir = paths::profiles_cfg_dir();
@@ -95,6 +95,22 @@ pub fn remove_tree(name: &str) -> Result<()> {
 
 pub fn config_env_path(name: &str) -> std::path::PathBuf {
     paths::profile_env_file(name)
+}
+
+pub fn read_config_env(name: &str) -> Result<env_file::EnvMap> {
+    env_file::read(&config_env_path(name))
+}
+
+pub fn read_office_config(name: &str) -> Result<validation::OfficeEnvConfig> {
+    let map = read_config_env(name)?;
+    let config = validation::office_env_config_from_map(&map);
+    validation::validate_office_config(&config)?;
+    Ok(config)
+}
+
+pub fn set_config_key(name: &str, key: &str, value: &str) -> Result<()> {
+    validation::validate_env_value(key, value)?;
+    env_file::set_key(&config_env_path(name), key, value)
 }
 
 pub fn ensure_dirs(name: &str) -> Result<()> {

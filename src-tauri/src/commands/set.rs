@@ -1,7 +1,10 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 
-use crate::core::{compose, docker, env_file, gpu_hooks, paths, profile, validation};
+use crate::core::{
+    compose, docker, env_file, gpu_hooks, office_state::OfficeProvisioningState, paths, profile,
+    validation,
+};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SetParams {
@@ -16,6 +19,15 @@ pub struct SetParams {
     /// Some("") clears GPU; Some("BDF") sets; None leaves untouched.
     #[serde(default, rename = "gpuBdf", alias = "gpu_bdf")]
     pub gpu_bdf: Option<String>,
+    /// Immutable Office fields are not editable by `set`; accepting them here
+    /// lets the backend reject destructive edits instead of silently ignoring
+    /// stale or hostile clients.
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default, rename = "officeLanguage", alias = "office_language")]
+    pub office_language: Option<String>,
     #[serde(default)]
     pub restart: bool,
 }
@@ -25,6 +37,7 @@ pub fn run(p: SetParams) -> Result<String> {
         bail!("Perfil '{}' não existe.", p.name);
     }
     let env_path = paths::profile_env_file(&p.name);
+    guard_office_immutable_update(&p, &env_path)?;
     let mut changed = false;
     let mut msgs: Vec<String> = Vec::new();
 
@@ -127,4 +140,138 @@ pub fn run(p: SetParams) -> Result<String> {
 
     let _ = c;
     Ok(msgs.join("\n"))
+}
+
+fn guard_office_immutable_update(p: &SetParams, env_path: &std::path::Path) -> Result<()> {
+    let map = env_file::read(env_path)?;
+    let config = validation::office_env_config_from_map(&map);
+    let state =
+        OfficeProvisioningState::load_or_default(&paths::profile_cfg_dir(&p.name), &p.name)?;
+    validation::guard_office_immutable_fields(
+        &config,
+        validation::OfficeImmutableUpdate {
+            version: p.version.as_deref(),
+            language: p.language.as_deref(),
+            office_language: p.office_language.as_deref(),
+        },
+        Some(&state),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::office_state::OfficePhase;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn office_set_refuses_immutable_keys_after_provisioning() {
+        let _lock = env_lock().lock().expect("env lock poisoned");
+        let _env = TestXdgEnv::new("office-set-refuses-immutable");
+        let profile_name = "office-set-immutable";
+        let profile_dir = paths::profile_cfg_dir(profile_name);
+        std::fs::create_dir_all(&profile_dir).expect("profile dir should be created");
+        std::fs::write(
+            paths::profile_env_file(profile_name),
+            "PROFILE_KIND=office\n\
+             VERSION=11\n\
+             LANGUAGE=Portuguese\n\
+             OFFICE_PRODUCT_ID=O365ProPlusRetail\n\
+             OFFICE_LANGUAGE=pt-br\n\
+             OFFICE_CHANNEL=Current\n\
+             RAM_SIZE=8G\n\
+             MEM_LIMIT=10G\n\
+             CPU_CORES=2\n\
+             DISK_SIZE=64G\n\
+             BUNDLES=essentials\n",
+        )
+        .expect("config.env should be written");
+        let mut state = OfficeProvisioningState::new(profile_name);
+        state
+            .mark_phase_running(OfficePhase::WindowsInstall)
+            .expect("windows install should run");
+        state
+            .mark_phase_done(OfficePhase::WindowsInstall, None)
+            .expect("windows install should finish");
+        state
+            .save_to_dir(&profile_dir)
+            .expect("office state should be saved");
+
+        let err = run(SetParams {
+            name: profile_name.to_string(),
+            ram: Some("16G".to_string()),
+            cpu: None,
+            disk: None,
+            user: None,
+            password: None,
+            extra_ports: None,
+            gpu_bdf: None,
+            version: Some("10".to_string()),
+            language: None,
+            office_language: None,
+            restart: false,
+        })
+        .expect_err("set must reject destructive Office version mutation");
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("VERSION"));
+        assert!(msg.contains("reinstalação destrutiva"));
+        let env_after =
+            std::fs::read_to_string(paths::profile_env_file(profile_name)).expect("env exists");
+        assert!(env_after.contains("VERSION=11"));
+        assert!(env_after.contains("RAM_SIZE=8G"));
+        assert!(!env_after.contains("RAM_SIZE=16G"));
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct TestXdgEnv {
+        old_config: Option<OsString>,
+        old_data: Option<OsString>,
+        root: PathBuf,
+    }
+
+    impl TestXdgEnv {
+        fn new(name: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            let root =
+                std::env::temp_dir().join(format!("winbox-{name}-{}-{nanos}", std::process::id()));
+            let config = root.join("config");
+            let data = root.join("data");
+            std::fs::create_dir_all(&config).expect("config temp dir");
+            std::fs::create_dir_all(&data).expect("data temp dir");
+            let old_config = std::env::var_os("XDG_CONFIG_HOME");
+            let old_data = std::env::var_os("XDG_DATA_HOME");
+            std::env::set_var("XDG_CONFIG_HOME", &config);
+            std::env::set_var("XDG_DATA_HOME", &data);
+            Self {
+                old_config,
+                old_data,
+                root,
+            }
+        }
+    }
+
+    impl Drop for TestXdgEnv {
+        fn drop(&mut self) {
+            match &self.old_config {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match &self.old_data {
+                Some(value) => std::env::set_var("XDG_DATA_HOME", value),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
 }

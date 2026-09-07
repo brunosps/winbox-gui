@@ -142,6 +142,21 @@ where
         .map_err(|e| format!("{e:#}"))
 }
 
+async fn run_office_blocking<T, F>(f: F) -> Result<T, crate::core::launch_error::OfficeError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, crate::core::launch_error::OfficeError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| {
+        crate::core::launch_error::OfficeError::new(
+            crate::core::launch_error::OfficeError::PROFILE_STATE_CONFLICT,
+            crate::core::office_state::OfficePhase::ProfileConfig,
+            true,
+            Some(serde_json::json!({ "detail": e.to_string() })),
+        )
+    })?
+}
+
 fn emit_progress(
     app: &AppHandle,
     profile: &str,
@@ -160,6 +175,45 @@ fn emit_progress(
             message: message.into(),
         },
     );
+}
+
+fn emit_office_progress(
+    app: &AppHandle,
+    profile: &str,
+    op: &str,
+    step: &str,
+    status: &str,
+    message: impl Into<String>,
+) {
+    let payload = commands::office::office_progress_payload(profile, op, step, status, message);
+    emit_progress(
+        app,
+        &payload.profile,
+        &payload.op,
+        &payload.step,
+        &payload.status,
+        payload.message,
+    );
+}
+
+fn emit_office_result<T>(
+    app: &AppHandle,
+    profile: &str,
+    op: &str,
+    step: &str,
+    result: &Result<T, crate::core::launch_error::OfficeError>,
+) {
+    match result {
+        Ok(_) => emit_office_progress(
+            app,
+            profile,
+            op,
+            step,
+            "success",
+            "Operação Office concluída.",
+        ),
+        Err(err) => emit_office_progress(app, profile, op, step, "error", err.to_string()),
+    }
 }
 
 fn actionable_error(raw: &str) -> String {
@@ -216,6 +270,195 @@ fn emit_operation_result(
 }
 
 // ─── Tauri commands ────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn office_preflight(
+    app: AppHandle,
+    args: commands::office::OfficePreflightArgs,
+) -> Result<
+    crate::core::office_preflight::OfficePreflightResult,
+    crate::core::launch_error::OfficeError,
+> {
+    let profile = args.name.clone().unwrap_or_else(|| "office".to_string());
+    emit_office_progress(
+        &app,
+        &profile,
+        "office_preflight",
+        "office_preflight",
+        "running",
+        "Verificando requisitos do perfil Office.",
+    );
+    let result = run_office_blocking(move || commands::office::preflight_contract(args)).await;
+    emit_office_result(
+        &app,
+        &profile,
+        "office_preflight",
+        "office_preflight",
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+async fn office_get_state(
+    app: AppHandle,
+    args: commands::office::OfficeNameArgs,
+) -> Result<commands::office::OfficeStateResponse, crate::core::launch_error::OfficeError> {
+    let profile = args.name.clone();
+    let result = run_office_blocking(move || commands::office::get_state_contract(args)).await;
+    emit_office_result(&app, &profile, "office_state", "office_preflight", &result);
+    result
+}
+
+#[tauri::command]
+async fn office_start_provisioning(
+    app: AppHandle,
+    args: commands::office::OfficeStartProvisioningArgs,
+) -> Result<commands::office::OfficeProvisioningResponse, crate::core::launch_error::OfficeError> {
+    let profile = args.name.clone();
+    emit_office_progress(
+        &app,
+        &profile,
+        "office_provision",
+        "office_byol",
+        "running",
+        "Iniciando provisionamento Office.",
+    );
+    let result =
+        run_office_blocking(move || commands::office::start_provisioning_contract(args)).await;
+    emit_office_result(&app, &profile, "office_provision", "office_byol", &result);
+    result
+}
+
+#[tauri::command]
+async fn office_retry_phase(
+    app: AppHandle,
+    args: commands::office::OfficeRetryPhaseArgs,
+) -> Result<commands::office::OfficeStateResponse, crate::core::launch_error::OfficeError> {
+    let profile = args.name.clone();
+    let step = commands::office::office_phase_progress_step(args.phase);
+    emit_office_progress(
+        &app,
+        &profile,
+        "office_provision",
+        step,
+        "running",
+        "Reagendando fase Office.",
+    );
+    let result = run_office_blocking(move || commands::office::retry_phase_contract(args)).await;
+    emit_office_result(&app, &profile, "office_provision", step, &result);
+    result
+}
+
+#[tauri::command]
+async fn office_adopt_profile(
+    app: AppHandle,
+    args: commands::office::OfficeAdoptProfileArgs,
+) -> Result<commands::office::OfficeStateResponse, crate::core::launch_error::OfficeError> {
+    let profile = args.name.clone();
+    emit_office_progress(
+        &app,
+        &profile,
+        "office_adopt",
+        "office_preflight",
+        "running",
+        "Registrando adoção do perfil Office.",
+    );
+    let result = run_office_blocking(move || commands::office::adopt_profile_contract(args)).await;
+    emit_office_result(&app, &profile, "office_adopt", "office_preflight", &result);
+    result
+}
+
+#[tauri::command]
+async fn office_launch_app(
+    app: AppHandle,
+    args: commands::office::OfficeLaunchAppArgs,
+) -> Result<commands::office::OfficeLaunchAppResponse, crate::core::launch_error::OfficeError> {
+    let profile = args.name.clone();
+    emit_office_progress(
+        &app,
+        &profile,
+        "office_launch",
+        "office_cold_start",
+        "running",
+        "Preparando VM para abrir aplicativo Office.",
+    );
+    let result = run_office_blocking(move || commands::office::launch_app_contract(args)).await;
+    match &result {
+        Ok(_) => emit_office_progress(
+            &app,
+            &profile,
+            "office_launch",
+            "office_launch_remoteapp",
+            "success",
+            "Aplicativo Office delegado ao WinApps.",
+        ),
+        Err(err) => emit_office_progress(
+            &app,
+            &profile,
+            "office_launch",
+            "office_cold_start",
+            "error",
+            err.to_string(),
+        ),
+    }
+    result
+}
+
+#[tauri::command]
+async fn office_remove_profile(
+    app: AppHandle,
+    args: commands::office::OfficeRemoveProfileArgs,
+) -> Result<commands::office::OfficeRemoveProfileResponse, crate::core::launch_error::OfficeError> {
+    let profile = args.name.clone();
+    emit_office_progress(
+        &app,
+        &profile,
+        "office_remove",
+        "office_remove_winapps",
+        "running",
+        "Preparando remoção do perfil Office.",
+    );
+    let result = run_office_blocking(move || commands::office::remove_profile_contract(args)).await;
+    match &result {
+        Ok(_) => emit_office_progress(
+            &app,
+            &profile,
+            "office_remove",
+            "office_remove_desktop",
+            "success",
+            "Perfil Office removido.",
+        ),
+        Err(err) => emit_office_progress(
+            &app,
+            &profile,
+            "office_remove",
+            "office_remove_winapps",
+            "error",
+            err.to_string(),
+        ),
+    }
+    result
+}
+
+#[tauri::command]
+async fn office_telemetry_set_opt_in(
+    app: AppHandle,
+    args: commands::office::OfficeTelemetrySetOptInArgs,
+) -> Result<commands::office::OfficeTelemetryOptInResponse, crate::core::launch_error::OfficeError>
+{
+    let result =
+        run_office_blocking(move || Ok(commands::office::telemetry_set_opt_in_contract(args)))
+            .await;
+    emit_office_result(
+        &app,
+        "office",
+        "office_telemetry",
+        "office_preflight",
+        &result,
+    );
+    result
+}
 
 #[tauri::command]
 fn list_profiles() -> Result<Vec<Profile>, String> {
@@ -688,6 +931,9 @@ async fn update_profile(app: AppHandle, params: UpdateArgs) -> Result<OperationR
         password: params.password,
         extra_ports: params.extra_ports,
         gpu_bdf: params.gpu_bdf,
+        version: None,
+        language: None,
+        office_language: None,
         restart: params.restart,
     };
     let profile_name = params.name;
@@ -862,6 +1108,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            office_preflight,
+            office_get_state,
+            office_start_provisioning,
+            office_retry_phase,
+            office_adopt_profile,
+            office_launch_app,
+            office_remove_profile,
+            office_telemetry_set_opt_in,
             list_profiles,
             launch_profile,
             open_web_vnc,

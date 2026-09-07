@@ -9,6 +9,9 @@ use crate::commands::{
 };
 use crate::core::{bundles, connect, env_file, host, paths, profile, snapshots};
 
+#[path = "cli_office.rs"]
+mod cli_office;
+
 #[derive(Parser, Debug)]
 #[command(name = "winbox", version = paths::WINBOX_VERSION, about = "Gerenciador de VMs Windows (dockur/windows)", disable_help_subcommand = true)]
 struct Cli {
@@ -148,6 +151,9 @@ enum Cmd {
         bdf: String,
     },
 
+    /// Provisiona, consulta e lança apps do perfil Office.
+    Office(cli_office::OfficeArgs),
+
     /// Abre a GUI
     Gui,
 }
@@ -250,8 +256,10 @@ enum BundlesCmd {
 pub fn run() -> i32 {
     match Cli::try_parse() {
         Ok(cli) => {
-            if cli.json {
-                match dispatch_json(cli.cmd) {
+            let mode = cli_office::OutputMode::from_json(cli.json);
+            match cli.cmd {
+                Cmd::Office(args) => cli_office::run_office_cli(args, mode),
+                cmd if cli.json => match dispatch_json(cmd) {
                     Ok(value) => {
                         print_json_success(value);
                         0
@@ -260,15 +268,14 @@ pub fn run() -> i32 {
                         print_json_error(&e);
                         1
                     }
-                }
-            } else {
-                match dispatch(cli.cmd) {
+                },
+                cmd => match dispatch(cmd) {
                     Ok(()) => 0,
                     Err(e) => {
                         eprintln!("✗ {}", e);
                         1
                     }
-                }
+                },
             }
         }
         Err(err) => {
@@ -443,6 +450,9 @@ fn dispatch(cmd: Cmd) -> Result<()> {
                 password: a.pass,
                 extra_ports: a.extra_ports,
                 gpu_bdf: a.gpu,
+                version: None,
+                language: None,
+                office_language: None,
                 restart: a.restart,
             };
             let msg = cmd_set::run(params)?;
@@ -550,6 +560,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             );
             Ok(())
         }
+        Cmd::Office(_) => unreachable!("Cmd::Office é roteado antes do dispatch legado"),
         Cmd::Gui => spawn_gui(),
     }
 }
@@ -673,6 +684,9 @@ fn dispatch_json(cmd: Cmd) -> Result<Value> {
                 password: a.pass,
                 extra_ports: a.extra_ports,
                 gpu_bdf: a.gpu,
+                version: None,
+                language: None,
+                office_language: None,
                 restart: a.restart,
             };
             let message = cmd_set::run(params)?;
@@ -710,6 +724,7 @@ fn dispatch_json(cmd: Cmd) -> Result<Value> {
             crate::core::vfio_setup::revert(&bdf)?;
             Ok(json!({ "bdf": bdf, "status": "finished" }))
         }
+        Cmd::Office(_) => unreachable!("Cmd::Office é roteado antes do dispatch_json legado"),
         Cmd::Gui => spawn_gui().map(|_| json!({ "status": "started" })),
     }
 }
@@ -1120,5 +1135,31 @@ mod tests {
             machine_error_hint("Porta 8006 em uso"),
             "Check port conflicts in Host Health."
         );
+    }
+
+    #[test]
+    fn legacy_cli_json_contract_unchanged_for_non_office() {
+        let value = dispatch_json(Cmd::Version).expect("legacy json command should still dispatch");
+
+        assert_eq!(value["name"], "winbox");
+        assert_eq!(
+            machine_error_code("docker info failed: daemon unavailable"),
+            "docker_daemon_unavailable"
+        );
+    }
+
+    #[test]
+    fn office_cli_parser_accepts_global_json_after_subcommand() {
+        let cli = Cli::try_parse_from(["winbox", "office", "status", "office", "--json"])
+            .expect("office status should parse with global json at the end");
+
+        assert!(cli.json);
+        let Cmd::Office(cli_office::OfficeArgs {
+            command: cli_office::OfficeSubcommand::Status { profile },
+        }) = cli.cmd
+        else {
+            panic!("expected office status command");
+        };
+        assert_eq!(profile, "office");
     }
 }

@@ -8,9 +8,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/xdg"
 PROFILE="test-profile"
 
+rm -rf "$ROOT"
+chmod +x "$HERE/mock-docker.sh" "$HERE"/shims/* 2>/dev/null || true
+
 CFG="$ROOT/config/winbox/profiles/$PROFILE"
 DATA="$ROOT/data/winbox/profiles/$PROFILE"
-mkdir -p "$CFG" "$DATA/storage" "$ROOT/cache"
+mkdir -p "$CFG" "$DATA/storage" "$ROOT/cache" "$ROOT/logs"
 
 cat > "$CFG/config.env" <<EOF
 IMAGE_FAMILY=linux_distro

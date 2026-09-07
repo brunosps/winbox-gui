@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="${WINBOX_E2E_SHIM_LOG_DIR:-$HERE/../xdg/logs}"
+mkdir -p "$LOG_DIR"
+printf 'flatpak %s\n' "$*" >> "$LOG_DIR/shims.log"
+
+if [ "${WINBOX_E2E_FLATPAK_FAIL:-0}" = "1" ]; then
+  echo "mock flatpak forced failure" >&2
+  exit 42
+fi
+
+if [ "${1:-}" = "info" ] && [ "${2:-}" = "--show-permissions" ]; then
+  cat <<'EOF'
+[Context]
+shared=network;ipc;
+filesystems=xdg-download;home;
+EOF
+  exit 0
+fi
+
+if [ "${1:-}" = "info" ] && [ "${2:-}" = "com.freerdp.FreeRDP" ]; then
+  [ "${WINBOX_E2E_FLATPAK_MISSING:-0}" = "1" ] && exit 1
+  echo "Name: FreeRDP"
+  exit 0
+fi
+
+if [ "${1:-}" = "list" ]; then
+  printf 'com.freerdp.FreeRDP\t3.28.\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "run" ]; then
+  echo "mock flatpak run ${*:2}"
+  exit 0
+fi
+
+if [ "${1:-}" = "install" ] || [ "${1:-}" = "override" ]; then
+  echo "mock flatpak $*"
+  exit 0
+fi
+
+exit 0

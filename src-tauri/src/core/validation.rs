@@ -1,7 +1,23 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+
+use super::office_state::{OfficePhase, OfficeProfileStatus, OfficeProvisioningState, PhaseStatus};
+
+pub const OFFICE_PROFILE_KIND: &str = "office";
+pub const OFFICE_WINDOWS_VERSION: &str = "11";
+pub const OFFICE_DEFAULT_PRODUCT_ID: &str = "O365ProPlusRetail";
+pub const OFFICE_DEFAULT_LANGUAGE: &str = "pt-br";
+pub const OFFICE_DEFAULT_CHANNEL: &str = "Current";
+pub const OFFICE_PRODUCT_IDS: &[&str] = &[
+    "O365ProPlusRetail",
+    "O365BusinessRetail",
+    "O365HomePremRetail",
+];
+pub const OFFICE_LANGUAGES: &[&str] = &["pt-br", "en-us"];
+pub const OFFICE_CHANNELS: &[&str] = &["Current"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PortForward {
@@ -14,6 +30,23 @@ pub struct PortForward {
 pub struct MemorySpec {
     pub env_value: String,
     pub gib: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OfficeEnvConfig {
+    pub profile_kind: String,
+    pub version: String,
+    pub language: String,
+    pub office_product_id: String,
+    pub office_language: String,
+    pub office_channel: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OfficeImmutableUpdate<'a> {
+    pub version: Option<&'a str>,
+    pub language: Option<&'a str>,
+    pub office_language: Option<&'a str>,
 }
 
 pub fn validate_profile_name(name: &str) -> Result<()> {
@@ -46,6 +79,133 @@ pub fn require_non_empty(label: &str, value: &str) -> Result<()> {
         bail!("{label} é obrigatório.");
     }
     Ok(())
+}
+
+pub fn office_env_config_from_map(map: &BTreeMap<String, String>) -> OfficeEnvConfig {
+    OfficeEnvConfig {
+        profile_kind: env_value(map, "PROFILE_KIND").to_string(),
+        version: env_value(map, "VERSION").to_string(),
+        language: env_value(map, "LANGUAGE").to_string(),
+        office_product_id: env_value(map, "OFFICE_PRODUCT_ID").to_string(),
+        office_language: env_value(map, "OFFICE_LANGUAGE").to_string(),
+        office_channel: env_value(map, "OFFICE_CHANNEL").to_string(),
+    }
+}
+
+pub fn validate_office_config(config: &OfficeEnvConfig) -> Result<()> {
+    validate_env_value("PROFILE_KIND", &config.profile_kind)?;
+    validate_env_value("VERSION", &config.version)?;
+    validate_env_value("LANGUAGE", &config.language)?;
+    validate_env_value("OFFICE_PRODUCT_ID", &config.office_product_id)?;
+    validate_env_value("OFFICE_LANGUAGE", &config.office_language)?;
+    validate_env_value("OFFICE_CHANNEL", &config.office_channel)?;
+
+    validate_allowlist_or_empty("PROFILE_KIND", &config.profile_kind, &[OFFICE_PROFILE_KIND])?;
+    validate_allowlist_or_empty(
+        "OFFICE_PRODUCT_ID",
+        &config.office_product_id,
+        OFFICE_PRODUCT_IDS,
+    )?;
+    validate_allowlist_or_empty("OFFICE_LANGUAGE", &config.office_language, OFFICE_LANGUAGES)?;
+    validate_allowlist_or_empty("OFFICE_CHANNEL", &config.office_channel, OFFICE_CHANNELS)?;
+
+    let has_office_keys = !config.office_product_id.is_empty()
+        || !config.office_language.is_empty()
+        || !config.office_channel.is_empty();
+    if has_office_keys && config.profile_kind != OFFICE_PROFILE_KIND {
+        bail!("Chaves Office exigem PROFILE_KIND=office.");
+    }
+
+    if config.profile_kind == OFFICE_PROFILE_KIND {
+        validate_allowlist_or_empty("VERSION", &config.version, &[OFFICE_WINDOWS_VERSION])?;
+    }
+
+    Ok(())
+}
+
+pub fn guard_office_immutable_fields(
+    current: &OfficeEnvConfig,
+    update: OfficeImmutableUpdate<'_>,
+    state: Option<&OfficeProvisioningState>,
+) -> Result<()> {
+    validate_office_config(current)?;
+    if current.profile_kind != OFFICE_PROFILE_KIND || !office_profile_has_provisioned_disk(state) {
+        return Ok(());
+    }
+
+    let mut blocked = Vec::new();
+    if immutable_field_changed(update.version, &current.version) {
+        blocked.push("VERSION");
+    }
+    if immutable_field_changed(update.language, &current.language) {
+        blocked.push("LANGUAGE");
+    }
+    if immutable_field_changed(update.office_language, &current.office_language) {
+        blocked.push("OFFICE_LANGUAGE");
+    }
+
+    if !blocked.is_empty() {
+        bail!(
+            "{} de perfil Office já provisionado é imutável. Alterar esse valor exige reinstalação destrutiva do disco.",
+            blocked.join("/")
+        );
+    }
+
+    Ok(())
+}
+
+fn office_profile_has_provisioned_disk(state: Option<&OfficeProvisioningState>) -> bool {
+    let Some(state) = state else {
+        return false;
+    };
+    if matches!(
+        state.status,
+        OfficeProfileStatus::Ready | OfficeProfileStatus::Adopted
+    ) {
+        return true;
+    }
+
+    [
+        OfficePhase::WindowsInstall,
+        OfficePhase::RemoteappPrepare,
+        OfficePhase::OfficeStageOdt,
+        OfficePhase::OfficeInstall,
+        OfficePhase::WinappsConfig,
+        OfficePhase::DesktopRegistration,
+        OfficePhase::FileAssociation,
+        OfficePhase::FinalVerify,
+        OfficePhase::FirstLaunch,
+    ]
+    .into_iter()
+    .any(|phase| {
+        matches!(
+            state.phase_status(phase),
+            Some(
+                PhaseStatus::Running
+                    | PhaseStatus::Done
+                    | PhaseStatus::Failed
+                    | PhaseStatus::Skipped
+            )
+        )
+    })
+}
+
+fn immutable_field_changed(candidate: Option<&str>, current: &str) -> bool {
+    candidate.is_some_and(|value| value != current)
+}
+
+fn validate_allowlist_or_empty(label: &str, value: &str, allowed: &[&str]) -> Result<()> {
+    if value.is_empty() || allowed.contains(&value) {
+        return Ok(());
+    }
+    bail!(
+        "{label} inválido '{value}' — valores permitidos: {}.",
+        allowed.join(", ")
+    );
+}
+
+fn env_value<'a>(map: &'a BTreeMap<String, String>, key: &str) -> &'a str {
+    map.get(key).map(String::as_str).unwrap_or("")
 }
 
 pub fn validate_password(value: &str, required: bool) -> Result<()> {
@@ -332,6 +492,116 @@ mod tests {
     use super::*;
 
     #[test]
+    fn office_env_defaults_are_backward_compatible() {
+        let map = BTreeMap::new();
+
+        let config = office_env_config_from_map(&map);
+
+        assert_eq!(config, OfficeEnvConfig::default());
+        validate_office_config(&config).expect("perfil antigo sem chaves Office deve ser aceito");
+        guard_office_immutable_fields(
+            &config,
+            OfficeImmutableUpdate {
+                version: Some("11"),
+                language: Some("Portuguese"),
+                office_language: Some("pt-br"),
+            },
+            None,
+        )
+        .expect("perfil sem PROFILE_KIND=office não deve acionar guarda Office");
+    }
+
+    #[test]
+    fn office_profile_rejects_language_version_mutation_after_provisioning() {
+        let current = office_config([
+            ("PROFILE_KIND", "office"),
+            ("VERSION", "11"),
+            ("LANGUAGE", "Portuguese"),
+            ("OFFICE_PRODUCT_ID", "O365ProPlusRetail"),
+            ("OFFICE_LANGUAGE", "pt-br"),
+            ("OFFICE_CHANNEL", "Current"),
+        ]);
+        let state = provisioned_office_state();
+
+        guard_office_immutable_fields(
+            &current,
+            OfficeImmutableUpdate {
+                version: Some("11"),
+                language: Some("Portuguese"),
+                office_language: Some("pt-br"),
+            },
+            Some(&state),
+        )
+        .expect("regravar os mesmos valores deve ser idempotente");
+
+        let err = guard_office_immutable_fields(
+            &current,
+            OfficeImmutableUpdate {
+                version: Some("10"),
+                language: None,
+                office_language: Some("en-us"),
+            },
+            Some(&state),
+        )
+        .expect_err("alterar versão/idioma após provisionamento deve ser bloqueado");
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("VERSION/OFFICE_LANGUAGE"));
+        assert!(msg.contains("reinstalação destrutiva"));
+
+        let draft_state = OfficeProvisioningState::new("office");
+        guard_office_immutable_fields(
+            &current,
+            OfficeImmutableUpdate {
+                version: Some("10"),
+                language: Some("English"),
+                office_language: Some("en-us"),
+            },
+            Some(&draft_state),
+        )
+        .expect("antes do disco ser provisionado, a troca ainda é configuração normal");
+    }
+
+    #[test]
+    fn office_product_id_allowlist() {
+        let valid = office_config([
+            ("PROFILE_KIND", "office"),
+            ("VERSION", "11"),
+            ("OFFICE_PRODUCT_ID", "O365BusinessRetail"),
+            ("OFFICE_LANGUAGE", "en-us"),
+            ("OFFICE_CHANNEL", "Current"),
+        ]);
+
+        validate_office_config(&valid).expect("Product ID da allowlist deve ser aceito");
+
+        let invalid = office_config([
+            ("PROFILE_KIND", "office"),
+            ("VERSION", "11"),
+            ("OFFICE_PRODUCT_ID", "OfficeLTSCRetail"),
+            ("OFFICE_LANGUAGE", "en-us"),
+            ("OFFICE_CHANNEL", "Current"),
+        ]);
+        let err =
+            validate_office_config(&invalid).expect_err("Product ID fora da allowlist deve falhar");
+
+        assert!(format!("{err:#}").contains("OFFICE_PRODUCT_ID inválido"));
+    }
+
+    #[test]
+    fn office_keys_require_office_profile_scope() {
+        let config = office_config([
+            ("OFFICE_PRODUCT_ID", "O365ProPlusRetail"),
+            ("OFFICE_LANGUAGE", "pt-br"),
+            ("OFFICE_CHANNEL", "Current"),
+        ]);
+
+        let err = validate_office_config(&config)
+            .expect_err("chaves Office não devem vazar para perfil não Office");
+
+        assert!(format!("{err:#}").contains("PROFILE_KIND=office"));
+    }
+
+    #[test]
     fn parses_extra_ports() {
         let ports = parse_extra_ports("8080:80, 5353:53/udp").unwrap();
         assert_eq!(
@@ -421,5 +691,24 @@ mod tests {
             msg.contains("drvfs"),
             "expected drvfs rejection, got: {msg}"
         );
+    }
+
+    fn office_config<const N: usize>(entries: [(&str, &str); N]) -> OfficeEnvConfig {
+        let map = entries
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        office_env_config_from_map(&map)
+    }
+
+    fn provisioned_office_state() -> OfficeProvisioningState {
+        let mut state = OfficeProvisioningState::new("office");
+        state
+            .mark_phase_running(OfficePhase::WindowsInstall)
+            .expect("windows_install deve iniciar");
+        state
+            .mark_phase_done(OfficePhase::WindowsInstall, None)
+            .expect("windows_install deve concluir");
+        state
     }
 }

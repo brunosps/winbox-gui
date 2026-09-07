@@ -34,6 +34,11 @@ pub struct PullEvent {
 /// Lower-level operations stay on `anyhow::Result` to keep the trait
 /// from leaking launch-specific semantics into housekeeping calls.
 pub trait DockerClient {
+    fn docker_binary_available(&self) -> bool;
+    fn docker_daemon_available(&self) -> bool;
+    fn docker_compose_available(&self) -> bool;
+    fn docker_network_inspect(&self, network: &str) -> Result<String>;
+    fn docker_daemon_json(&self) -> Result<String>;
     fn container_status(&self, name: &str) -> String;
     fn compose_run(
         &self,
@@ -66,6 +71,56 @@ pub trait DockerClient {
 pub struct CliDocker;
 
 impl DockerClient for CliDocker {
+    fn docker_binary_available(&self) -> bool {
+        which::which("docker").is_ok()
+    }
+
+    fn docker_daemon_available(&self) -> bool {
+        Command::new("docker")
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn docker_compose_available(&self) -> bool {
+        Command::new("docker")
+            .args(["compose", "version"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+            || Command::new("docker-compose")
+                .arg("version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+    }
+
+    fn docker_network_inspect(&self, network: &str) -> Result<String> {
+        let out = Command::new("docker")
+            .args(["network", "inspect", network])
+            .output()?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+        }
+        bail!(
+            "docker network inspect {} falhou: {}",
+            network,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )
+    }
+
+    fn docker_daemon_json(&self) -> Result<String> {
+        std::fs::read_to_string("/etc/docker/daemon.json")
+            .map_err(|err| anyhow!("não foi possível ler /etc/docker/daemon.json: {err}"))
+    }
+
     fn container_status(&self, name: &str) -> String {
         let out = Command::new("docker")
             .args([
@@ -634,7 +689,7 @@ pub mod mock {
     //! Test double: records every call and returns scripted values.
 
     use super::{DockerClient, LaunchError};
-    use anyhow::Result;
+    use anyhow::{anyhow, bail, Result};
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -645,6 +700,11 @@ pub mod mock {
         pub calls: RefCell<Vec<String>>,
         pub fail_compose: RefCell<Option<LaunchError>>,
         pub fail_pull: RefCell<Option<LaunchError>>,
+        pub docker_binary_available: RefCell<bool>,
+        pub docker_daemon_available: RefCell<bool>,
+        pub docker_compose_available: RefCell<bool>,
+        pub network_inspect_outputs: RefCell<HashMap<String, Option<String>>>,
+        pub daemon_json_output: RefCell<Option<String>>,
     }
 
     impl MockDocker {
@@ -664,6 +724,24 @@ pub mod mock {
         pub fn set_compose_failure(&self, err: LaunchError) {
             *self.fail_compose.borrow_mut() = Some(err);
         }
+        pub fn seed_preflight(
+            &self,
+            docker_binary: bool,
+            docker_daemon: bool,
+            docker_compose: bool,
+        ) {
+            *self.docker_binary_available.borrow_mut() = docker_binary;
+            *self.docker_daemon_available.borrow_mut() = docker_daemon;
+            *self.docker_compose_available.borrow_mut() = docker_compose;
+        }
+        pub fn seed_network_inspect(&self, network: &str, output: Option<&str>) {
+            self.network_inspect_outputs
+                .borrow_mut()
+                .insert(network.to_string(), output.map(str::to_string));
+        }
+        pub fn seed_daemon_json(&self, output: &str) {
+            *self.daemon_json_output.borrow_mut() = Some(output.to_string());
+        }
         pub fn calls(&self) -> Vec<String> {
             self.calls.borrow().clone()
         }
@@ -673,6 +751,37 @@ pub mod mock {
     }
 
     impl DockerClient for MockDocker {
+        fn docker_binary_available(&self) -> bool {
+            self.record("preflight", "docker_binary");
+            *self.docker_binary_available.borrow()
+        }
+
+        fn docker_daemon_available(&self) -> bool {
+            self.record("preflight", "docker_daemon");
+            *self.docker_daemon_available.borrow()
+        }
+
+        fn docker_compose_available(&self) -> bool {
+            self.record("preflight", "docker_compose");
+            *self.docker_compose_available.borrow()
+        }
+
+        fn docker_network_inspect(&self, network: &str) -> Result<String> {
+            self.record("network_inspect", network);
+            match self.network_inspect_outputs.borrow().get(network) {
+                Some(Some(output)) => Ok(output.clone()),
+                _ => bail!("network inspect não disponível para {network}"),
+            }
+        }
+
+        fn docker_daemon_json(&self) -> Result<String> {
+            self.record("daemon_json", "/etc/docker/daemon.json");
+            self.daemon_json_output
+                .borrow()
+                .clone()
+                .ok_or_else(|| anyhow!("daemon.json ausente no mock"))
+        }
+
         fn container_status(&self, name: &str) -> String {
             self.record("status", name);
             self.statuses
