@@ -174,9 +174,9 @@ pub fn run(p: InstallParams) -> Result<()> {
         ver = p.version,
         boot = boot_value,
         iso = p.iso_path.clone().unwrap_or_default(),
-        ram = &ram.env_value,
-        cpu = &cpu,
-        disk = &disk,
+        ram = ram.env_value,
+        cpu = cpu,
+        disk = disk,
         user = p.user,
         pass = stored_password,
         lang = p.language,
@@ -194,10 +194,10 @@ pub fn run(p: InstallParams) -> Result<()> {
         shared = paths::profile_shared_dir(&p.name).display(),
         oem = paths::profile_oem_dir(&p.name).display(),
         mem = mem_limit,
-        bundles = &bundles,
+        bundles = bundles,
         cloud_init_profile = cloud_init_profile.as_env_value(),
         extra_ports = extra_ports,
-        gpu_bdf = &gpu_bdf,
+        gpu_bdf = gpu_bdf,
     );
     std::fs::write(&env_path, body).with_context(|| format!("writing {}", env_path.display()))?;
 
